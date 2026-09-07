@@ -1,0 +1,69 @@
+name: Apply Automatic Restart Updater 2.4.2
+
+on:
+  push:
+    paths:
+      - '.github/workflows/apply-v242.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch-test-commit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply v2.4.2 patch
+        run: python .github/scripts/apply_v242.py
+
+      - name: Install dependencies
+        run: python -m pip install packaging requests flask 'flet[all]>=0.86.5,<0.87'
+
+      - name: Python syntax checks
+        run: python -m py_compile manager.py factorio_settings.py process_restart.py app.py flet_app.py storage.py launcher.py
+
+      - name: Flet compatibility regression check
+        run: |
+          python - <<'PY'
+          import inspect, flet as ft
+          assert 'helper_text' not in inspect.signature(ft.TextField).parameters
+          source = open('flet_app.py', encoding='utf-8').read()
+          assert 'helper_text=' not in source
+          print('Flet compatibility: PASS')
+          PY
+
+      - name: Core offline tests
+        run: python tests/test_core_offline.py
+
+      - name: Search offline tests
+        run: python tests/test_search_offline.py
+
+      - name: Real settings editor offline tests
+        run: python tests/test_settings_editor_offline.py
+
+      - name: Automatic restart updater tests
+        run: python tests/test_auto_restart_update.py
+
+      - name: JavaScript syntax check
+        run: node --check static/app.js
+
+      - name: Remove one-shot patch files
+        run: |
+          rm -f .github/scripts/apply_v242.py
+          rm -f .github/workflows/apply-v242.yml
+
+      - name: Commit tested v2.4.2
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "feat: restart automatically after app update pull"
+            git push origin HEAD:main
+          fi
