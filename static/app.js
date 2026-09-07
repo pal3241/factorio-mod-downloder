@@ -132,6 +132,7 @@ function renderInstalled() {
             </div>
             <div class="row-actions">
                 <label class="switch" title="Enable/disable"><input type="checkbox" data-enable="${escapeHTML(mod.name)}" ${mod.enabled ? "checked" : ""}><span></span></label>
+                <button class="ghost small" data-mod-settings="${escapeHTML(mod.name)}">⚙ Settings</button>
                 <button class="ghost small" data-update="${escapeHTML(mod.name)}">Update</button>
                 <button class="danger small" data-remove="${escapeHTML(mod.name)}">Remove</button>
             </div>
@@ -140,8 +141,54 @@ function renderInstalled() {
         try { await api("/api/enable", {method:"POST", body:JSON.stringify({mod:el.dataset.enable, enabled:el.checked})}); await loadInstalled(); toast(`${el.dataset.enable} ${el.checked ? "enabled" : "disabled"}.`); }
         catch(err) { el.checked = !el.checked; toast(err.message, "error"); }
     }));
+    document.querySelectorAll("[data-mod-settings]").forEach(el => el.addEventListener("click", () => openModSettings(el.dataset.modSettings)));
     document.querySelectorAll("[data-update]").forEach(el => el.addEventListener("click", () => updateOne(el.dataset.update, el)));
     document.querySelectorAll("[data-remove]").forEach(el => el.addEventListener("click", () => removeMod(el.dataset.remove, el)));
+}
+
+function closeModal() {
+    $("modal").classList.add("hidden");
+    $("modalBody").innerHTML = "";
+}
+
+function openModSettings(name) {
+    const mod = state.installed.find(item => item.name === name);
+    if (!mod) { toast(`Mod ${name} not found.`, "error"); return; }
+    const deps = (mod.dependencies || []).map(dep => `<div class="mod-setting-dep">• ${escapeHTML(dep.raw || dep.name || "")}</div>`).join("") || `<div class="hint">No declared dependencies.</div>`;
+    $("modalBody").innerHTML = `
+        <div class="mod-settings-head"><div class="mod-icon">${escapeHTML((mod.title || mod.name).slice(0,2).toUpperCase())}</div><div><h2>${escapeHTML(mod.title || mod.name)}</h2><p>${escapeHTML(mod.name)} · v${escapeHTML(mod.version)} · Factorio ${escapeHTML(mod.factorio_version || "?")}</p></div></div>
+        <div class="mod-settings-grid">
+            <div><span>Author</span><strong>${escapeHTML(mod.author || "?")}</strong></div>
+            <div><span>Type</span><strong>${escapeHTML(mod.kind || "?")}</strong></div>
+            <div><span>In-game settings</span><strong>${mod.has_settings ? "settings.lua detected" : "None declared"}</strong></div>
+            <div><span>File</span><strong>${escapeHTML(mod.file || "?")}</strong></div>
+        </div>
+        <label class="checkbox-row"><input type="checkbox" id="modalModEnabled" ${mod.enabled ? "checked" : ""}><span>Enabled</span></label>
+        <div class="dependency-preview"><strong>Dependencies</strong>${deps}</div>
+        ${mod.has_settings ? `<p class="hint good-note">Gameplay values are configured in Factorio → Settings → Mod settings.</p>` : ""}
+        <div class="actions mod-settings-actions">
+            <button class="ghost" id="modalOpenFolder">Open Folder</button>
+            <button class="ghost" id="modalOpenPortal">Mod Portal</button>
+            <button id="modalUpdateMod">Check / Update</button>
+        </div>
+        <p class="hint" id="modalModStatus"></p>`;
+    $("modal").classList.remove("hidden");
+
+    $("modalModEnabled").addEventListener("change", async e => {
+        try { await api("/api/enable", {method:"POST", body:JSON.stringify({mod:name, enabled:e.target.checked})}); mod.enabled=e.target.checked; $("modalModStatus").textContent=`${name} ${e.target.checked ? "enabled" : "disabled"}.`; await loadInstalled(); }
+        catch(err){ e.target.checked=!e.target.checked; $("modalModStatus").textContent=err.message; }
+    });
+    $("modalOpenFolder").addEventListener("click", async () => {
+        try { const data=await api("/api/mod/open-location", {method:"POST", body:JSON.stringify({mod:name})}); $("modalModStatus").textContent=`Opened ${data.result.path}`; }
+        catch(err){ $("modalModStatus").textContent=err.message; }
+    });
+    $("modalOpenPortal").addEventListener("click", () => window.open(`https://mods.factorio.com/mod/${encodeURIComponent(name)}`, "_blank", "noopener"));
+    $("modalUpdateMod").addEventListener("click", async e => {
+        busy(e.currentTarget,true,"Updating...");
+        try { const data=await api("/api/update", {method:"POST", body:JSON.stringify({mod:name})}); $("modalModStatus").textContent=data.result.updated ? `${name}: ${data.result.from} → ${data.result.to}` : `${name} already current.`; await loadInstalled(); }
+        catch(err){ $("modalModStatus").textContent=err.message; }
+        finally{ busy(e.currentTarget,false); }
+    });
 }
 
 // ---------- Factorio-style Mod Portal browser ----------
@@ -500,6 +547,54 @@ async function saveProfile() {
     try{const data=await api("/api/profile/save",{method:"POST",body:JSON.stringify({name})});toast(`Saved ${data.result.name}.`);$("profileName").value="";await loadProfiles();}catch(err){toast(err.message,"error");}
 }
 
+async function checkAppUpdate(showToast = true) {
+    const button = $("checkAppUpdateBtn");
+    const pull = $("pullAppUpdateBtn");
+    const statusEl = $("appUpdateStatus");
+    busy(button, true, "Checking...");
+    statusEl.textContent = "Checking origin/main...";
+    try {
+        const data = await api("/api/app-update");
+        const s = data.status;
+        if (!s.git_repo) {
+            statusEl.textContent = s.message || "Not a Git clone.";
+            pull.disabled = true;
+        } else if (s.update_available) {
+            statusEl.textContent = `Update available: ${s.local_short} → ${s.remote_short} · ${s.behind} commit(s)${s.dirty ? " · local changes detected; commit/stash first" : ""}`;
+            pull.disabled = !!(s.dirty || s.ahead);
+            if (showToast) toast("Application update available.", "warn");
+        } else {
+            statusEl.textContent = `Up to date · ${s.local_short || "?"}`;
+            pull.disabled = true;
+            if (showToast) toast("Application is up to date.");
+        }
+    } catch(err) {
+        statusEl.textContent = err.message;
+        pull.disabled = true;
+        if (showToast) toast(err.message, "error");
+    } finally { busy(button, false); }
+}
+
+async function pullAppUpdate() {
+    const button = $("pullAppUpdateBtn");
+    const statusEl = $("appUpdateStatus");
+    busy(button, true, "Pulling...");
+    try {
+        const data = await api("/api/app-update/pull", {method:"POST", body:"{}"});
+        if (data.result.changed) {
+            const after = data.result.after || {};
+            statusEl.textContent = `Updated to ${after.local_short || "new commit"}. Restart Factorio Mod Manager to load the new code.`;
+            toast("Update pulled. Restart the app to apply it.");
+        } else {
+            statusEl.textContent = "Already up to date.";
+            toast("Already up to date.");
+        }
+    } catch(err) {
+        statusEl.textContent = err.message;
+        toast(err.message, "error");
+    } finally { button.disabled = true; }
+}
+
 async function loadDiagnostics() {
     try { const data=await api("/api/diagnostics"); const d=data.diagnostics; $("diagnosticsBox").innerHTML=`<div class="panel"><strong>Diagnostics</strong><p class="hint">Installed ${d.installed_count} · Enabled ${d.enabled_count} · Dependency issues ${d.dependency_issue_count} · Duplicate groups ${d.duplicates.length} · Invalid files ${d.invalid_files.length}</p></div>`; }
     catch(err){$("diagnosticsBox").innerHTML=`<div class="error-box">${escapeHTML(err.message)}</div>`;}
@@ -521,6 +616,10 @@ $("checkUpdatesBtn").addEventListener("click", e => checkUpdates(e.currentTarget
 $("updateAllBtn").addEventListener("click", updateAll);
 $("saveSettingsBtn").addEventListener("click", saveSettings);
 $("saveProfileBtn").addEventListener("click", saveProfile);
+$("checkAppUpdateBtn").addEventListener("click", () => checkAppUpdate(true));
+$("pullAppUpdateBtn").addEventListener("click", pullAppUpdate);
+$("modalClose").addEventListener("click", closeModal);
+$("modal").addEventListener("click", e => { if (e.target === $("modal")) closeModal(); });
 $("backupBtn").addEventListener("click", () => maintenance("/api/backup", "Backup created."));
 $("repairBtn").addEventListener("click", () => maintenance("/api/repair", "Dependency repair finished."));
 $("cleanDuplicatesBtn").addEventListener("click", () => maintenance("/api/clean-duplicates", "Duplicate cleanup finished."));

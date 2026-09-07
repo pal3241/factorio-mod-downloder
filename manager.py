@@ -16,6 +16,7 @@ from typing import Any
 from urllib.parse import unquote, urlparse
 import hashlib
 import uuid
+import webbrowser
 
 import requests
 from packaging.version import InvalidVersion, Version
@@ -209,8 +210,9 @@ def satisfies(version: str, operator: str | None, required: str | None) -> bool:
 
 
 class FactorioModManager:
-    def __init__(self, config_path: Path):
+    def __init__(self, config_path: Path, project_root: Path | None = None):
         self.config_path = config_path
+        self.project_root = Path(project_root).resolve() if project_root else Path(__file__).resolve().parent
         self.session = requests.Session()
         self.session.headers.update({
             "User-Agent": "Factorio-Local-Mod-Manager/1.0"
@@ -369,6 +371,17 @@ class FactorioModManager:
         except (OSError, json.JSONDecodeError, UnicodeDecodeError):
             return None
 
+    def _mod_has_settings(self, path: Path, kind: str) -> bool:
+        if kind == "folder":
+            return (path / "settings.lua").is_file()
+        if kind == "zip":
+            try:
+                with zipfile.ZipFile(path, "r") as archive:
+                    return any(name == "settings.lua" or name.endswith("/settings.lua") for name in archive.namelist())
+            except (OSError, zipfile.BadZipFile):
+                return False
+        return False
+
     def list_installed(self) -> list[dict[str, Any]]:
         self.mods_dir.mkdir(parents=True, exist_ok=True)
         enabled = self._enabled_map()
@@ -409,6 +422,7 @@ class FactorioModManager:
                 "file": path.name,
                 "path": str(path),
                 "kind": kind,
+                "has_settings": self._mod_has_settings(path, kind),
                 "dependencies": dependencies,
             })
 
@@ -1425,6 +1439,138 @@ class FactorioModManager:
             "repaired": repaired,
             "errors": errors,
             "remaining": self.dependency_issues(),
+        }
+
+    def get_installed_mod(self, name: str) -> dict[str, Any]:
+        name = parse_mod_name(name)
+        mod = self.installed_index().get(name)
+        if not mod:
+            raise ManagerError(f"{name} belum terpasang.")
+        return mod
+
+    def open_mod_location(self, name: str) -> dict[str, str]:
+        mod = self.get_installed_mod(name)
+        target = Path(mod["path"]).resolve()
+        system = platform.system().lower()
+        try:
+            if system == "windows":
+                if target.is_file():
+                    subprocess.Popen(["explorer", "/select,", str(target)])
+                else:
+                    os.startfile(str(target))
+            elif system == "darwin":
+                if target.is_file():
+                    subprocess.Popen(["open", "-R", str(target)])
+                else:
+                    subprocess.Popen(["open", str(target)])
+            else:
+                subprocess.Popen(["xdg-open", str(target if target.is_dir() else target.parent)])
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise ManagerError(f"Gagal membuka lokasi mod: {exc}") from exc
+        return {"name": name, "path": str(target)}
+
+    def open_mod_portal(self, name: str) -> dict[str, str]:
+        name = parse_mod_name(name)
+        url = f"{MOD_PORTAL}/mod/{name}"
+        try:
+            opened = webbrowser.open(url, new=2)
+        except Exception as exc:
+            raise ManagerError(f"Gagal membuka browser: {exc}") from exc
+        return {"name": name, "url": url, "opened": bool(opened)}
+
+    def _run_git(self, *args: str, check: bool = True, timeout: int = 90) -> subprocess.CompletedProcess[str]:
+        try:
+            result = subprocess.run(
+                ["git", *args],
+                cwd=str(self.project_root),
+                text=True,
+                capture_output=True,
+                timeout=timeout,
+            )
+        except FileNotFoundError as exc:
+            raise ManagerError("Git tidak ditemukan. Install Git dan pastikan tersedia di PATH.") from exc
+        except subprocess.TimeoutExpired as exc:
+            raise ManagerError("Perintah Git timeout.") from exc
+
+        if check and result.returncode != 0:
+            detail = (result.stderr or result.stdout or "Git command failed").strip()
+            raise ManagerError(detail)
+        return result
+
+    def app_update_status(self, fetch: bool = True) -> dict[str, Any]:
+        git_dir = self.project_root / ".git"
+        if not git_dir.exists():
+            return {
+                "git_repo": False,
+                "update_available": False,
+                "dirty": False,
+                "message": "Folder aplikasi bukan Git clone. Check/Pull Update hanya tersedia jika project di-clone dengan Git.",
+                "project_root": str(self.project_root),
+            }
+
+        branch = self._run_git("rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+        remote_url_result = self._run_git("remote", "get-url", "origin", check=False)
+        remote_url = remote_url_result.stdout.strip() if remote_url_result.returncode == 0 else ""
+        if not remote_url:
+            raise ManagerError("Git remote 'origin' tidak ditemukan.")
+
+        if fetch:
+            self._run_git("fetch", "--quiet", "origin", timeout=120)
+
+        local_sha = self._run_git("rev-parse", "HEAD").stdout.strip()
+        remote_ref = "origin/main"
+        remote_sha_result = self._run_git("rev-parse", remote_ref, check=False)
+        if remote_sha_result.returncode != 0:
+            remote_ref = f"origin/{branch}"
+            remote_sha_result = self._run_git("rev-parse", remote_ref, check=False)
+        if remote_sha_result.returncode != 0:
+            raise ManagerError("Branch remote untuk updater tidak ditemukan.")
+        remote_sha = remote_sha_result.stdout.strip()
+
+        behind = int(self._run_git("rev-list", "--count", f"HEAD..{remote_ref}").stdout.strip() or "0")
+        ahead = int(self._run_git("rev-list", "--count", f"{remote_ref}..HEAD").stdout.strip() or "0")
+        dirty = bool(self._run_git("status", "--porcelain").stdout.strip())
+        subject = self._run_git("log", "-1", "--pretty=%s", remote_ref).stdout.strip()
+
+        return {
+            "git_repo": True,
+            "project_root": str(self.project_root),
+            "branch": branch,
+            "remote": remote_url,
+            "remote_ref": remote_ref,
+            "local_sha": local_sha,
+            "remote_sha": remote_sha,
+            "local_short": local_sha[:7],
+            "remote_short": remote_sha[:7],
+            "behind": behind,
+            "ahead": ahead,
+            "dirty": dirty,
+            "update_available": behind > 0,
+            "latest_subject": subject,
+            "message": f"{behind} commit(s) behind, {ahead} ahead" if (behind or ahead) else "Up to date",
+        }
+
+    def pull_app_update(self) -> dict[str, Any]:
+        status = self.app_update_status(fetch=True)
+        if not status.get("git_repo"):
+            raise ManagerError(status.get("message") or "Aplikasi bukan Git clone.")
+        if status.get("dirty"):
+            raise ManagerError("Ada perubahan lokal yang belum di-commit. Commit/stash dulu sebelum Pull Update agar file tidak tertimpa.")
+        if status.get("ahead") and status.get("behind"):
+            raise ManagerError("Branch lokal dan origin berbeda arah (diverged). Pull otomatis dibatalkan agar aman.")
+        if not status.get("update_available"):
+            return {"changed": False, "before": status, "after": status, "restart_required": False, "output": "Already up to date."}
+
+        before_sha = status["local_sha"]
+        result = self._run_git("pull", "--ff-only", "origin", "main", timeout=180)
+        after = self.app_update_status(fetch=False)
+        changed = before_sha != after.get("local_sha")
+        return {
+            "changed": changed,
+            "before": status,
+            "after": after,
+            "restart_required": changed,
+            "output": (result.stdout or result.stderr or "").strip(),
         }
 
     def launch_factorio(self) -> dict[str, Any]:

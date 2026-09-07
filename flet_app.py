@@ -184,6 +184,7 @@ class FactorioFletUI:
                                 ]),
                                 ft.Row(controls=[
                                     toggle,
+                                    ft.IconButton(icon=ft.Icons.SETTINGS_OUTLINED, tooltip="Mod settings", data=mod["name"], on_click=self.show_mod_settings),
                                     ft.IconButton(icon=ft.Icons.SYSTEM_UPDATE_ALT, tooltip="Update", data=mod["name"], on_click=self.update_one),
                                     ft.IconButton(icon=ft.Icons.DELETE_OUTLINE, tooltip="Remove", data=mod["name"], on_click=self.remove_one),
                                 ]),
@@ -219,6 +220,124 @@ class FactorioFletUI:
 
         self.body.controls.append(list_col)
         build_rows()
+
+    async def show_mod_settings(self, e):
+        name = str(e.control.data or "")
+        mod = next((item for item in self.installed if item.get("name") == name), None)
+        if not mod:
+            self.notify(f"Mod {name} tidak ditemukan.", True)
+            return
+
+        status = ft.Text("", size=11, color="#a69d93")
+        enabled = ft.Switch(label="Enabled", value=bool(mod.get("enabled")))
+        dialog = None
+
+        async def change_enabled(ev):
+            wanted = bool(ev.control.value)
+            try:
+                await self.run_bg(manager.set_enabled, name, wanted)
+                mod["enabled"] = wanted
+                status.value = f'{name} {"enabled" if wanted else "disabled"}.'
+                status.color = "#8fbf75"
+            except Exception as exc:
+                ev.control.value = not wanted
+                status.value = str(exc)
+                status.color = "#ff8c86"
+            self.page.update()
+
+        async def update_mod(ev):
+            ev.control.disabled = True
+            status.value = f"Checking {name}..."
+            status.color = "#a69d93"
+            self.page.update()
+            try:
+                result = await self.run_bg(manager.update_one, name)
+                status.value = f'{name}: {result["from"]} → {result["to"]}' if result.get("updated") else f"{name} already current."
+                status.color = "#8fbf75"
+                self.installed = await self.run_bg(manager.list_installed)
+            except Exception as exc:
+                status.value = str(exc)
+                status.color = "#ff8c86"
+            finally:
+                ev.control.disabled = False
+                self.page.update()
+
+        async def open_location(ev):
+            try:
+                result = await self.run_bg(manager.open_mod_location, name)
+                status.value = f'Opened: {result["path"]}'
+                status.color = "#8fbf75"
+            except Exception as exc:
+                status.value = str(exc)
+                status.color = "#ff8c86"
+            self.page.update()
+
+        async def open_portal(ev):
+            try:
+                await self.run_bg(manager.open_mod_portal, name)
+                status.value = "Opened Factorio Mod Portal."
+                status.color = "#8fbf75"
+            except Exception as exc:
+                status.value = str(exc)
+                status.color = "#ff8c86"
+            self.page.update()
+
+        def close_dialog(ev=None):
+            try:
+                self.page.pop_dialog()
+            except Exception:
+                if dialog is not None:
+                    dialog.open = False
+                self.page.update()
+
+        enabled.on_change = change_enabled
+        deps = []
+        for dep in mod.get("dependencies") or []:
+            raw = str(dep.get("raw") or dep.get("name") or "").strip()
+            if raw:
+                deps.append(ft.Text(f"• {raw}", size=11, color="#c8c0b7"))
+        if not deps:
+            deps.append(ft.Text("No declared dependencies.", size=11, color="#77716b"))
+
+        settings_note = (
+            ft.Text("settings.lua detected — configure gameplay values inside Factorio → Settings → Mod settings.", size=11, color="#8fbf75")
+            if mod.get("has_settings")
+            else ft.Text("This mod does not declare settings.lua.", size=11, color="#77716b")
+        )
+
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Row(controls=[ft.Icon(ft.Icons.SETTINGS_OUTLINED, color="#e48c30"), ft.Text(f'Mod Settings — {mod.get("title") or name}', weight=ft.FontWeight.BOLD)]),
+            content=ft.Container(
+                width=570,
+                content=ft.Column(
+                    scroll=ft.ScrollMode.AUTO,
+                    tight=True,
+                    spacing=10,
+                    controls=[
+                        ft.Row(controls=[enabled, ft.Container(expand=True), ft.Text(f'v{mod.get("version") or "?"}', color="#f2b25c")]),
+                        ft.Text(f'ID: {name}', size=11, color="#a69d93"),
+                        ft.Text(f'Author: {mod.get("author") or "?"}', size=11, color="#a69d93"),
+                        ft.Text(f'Factorio: {mod.get("factorio_version") or "?"}', size=11, color="#a69d93"),
+                        ft.Text(f'File: {mod.get("file") or "?"}', size=11, color="#70685f"),
+                        settings_note,
+                        ft.Divider(color="#39332b"),
+                        ft.Text("Dependencies", weight=ft.FontWeight.BOLD),
+                        *deps,
+                        ft.Divider(color="#39332b"),
+                        status,
+                    ],
+                ),
+            ),
+            actions=[
+                ft.Button("Open folder", icon=ft.Icons.FOLDER_OPEN, on_click=open_location, bgcolor="#24211e", color="#d8d0c7"),
+                ft.Button("Mod Portal", icon=ft.Icons.OPEN_IN_NEW, on_click=open_portal, bgcolor="#24211e", color="#d8d0c7"),
+                ft.Button("Check / Update", icon=ft.Icons.SYSTEM_UPDATE_ALT, on_click=update_mod),
+                ft.TextButton("Close", on_click=close_dialog),
+            ],
+        )
+        self.page.show_dialog(dialog)
+        self.page.update()
 
     async def toggle_mod(self, e):
         try:
@@ -669,9 +788,75 @@ class FactorioFletUI:
             try:
                 r = await self.run_bg(manager.backup_state, "flet"); self.notify(f'Backup: {r["path"]}')
             except Exception as exc: self.notify(str(exc), True)
+
+        app_update_text = ft.Text("Not checked yet.", size=11, color="#a69d93")
+        pull_update_btn = ft.Button("Pull Update", icon=ft.Icons.DOWNLOAD, disabled=True, bgcolor="#2b2824", color="#e6ded5")
+
+        async def check_app_update(e):
+            e.control.disabled = True
+            app_update_text.value = "Checking origin/main..."
+            app_update_text.color = "#a69d93"
+            self.page.update()
+            try:
+                result = await self.run_bg(manager.app_update_status, True)
+                if not result.get("git_repo"):
+                    app_update_text.value = result.get("message", "Not a Git clone.")
+                    app_update_text.color = "#e4b65f"
+                    pull_update_btn.disabled = True
+                elif result.get("update_available"):
+                    app_update_text.value = f'Update available: {result["local_short"]} → {result["remote_short"]} · {result["behind"]} commit(s) · {result.get("latest_subject") or ""}'
+                    app_update_text.color = "#e4b65f"
+                    pull_update_btn.disabled = bool(result.get("dirty") or result.get("ahead"))
+                    if result.get("dirty"):
+                        app_update_text.value += " · local changes detected; commit/stash first"
+                else:
+                    app_update_text.value = f'Up to date · {result.get("local_short", "?")}'
+                    app_update_text.color = "#8fbf75"
+                    pull_update_btn.disabled = True
+            except Exception as exc:
+                app_update_text.value = str(exc)
+                app_update_text.color = "#ff8c86"
+                pull_update_btn.disabled = True
+            finally:
+                e.control.disabled = False
+                self.page.update()
+
+        async def pull_app_update(e):
+            e.control.disabled = True
+            app_update_text.value = "Pulling update..."
+            app_update_text.color = "#a69d93"
+            self.page.update()
+            try:
+                result = await self.run_bg(manager.pull_app_update)
+                if result.get("changed"):
+                    after = result.get("after") or {}
+                    app_update_text.value = f'Updated to {after.get("local_short", "new commit")}. Restart Factorio Mod Manager to load the new code.'
+                    app_update_text.color = "#8fbf75"
+                    self.notify("Update pulled successfully. Restart the app to apply it.")
+                else:
+                    app_update_text.value = "Already up to date."
+                    app_update_text.color = "#8fbf75"
+            except Exception as exc:
+                app_update_text.value = str(exc)
+                app_update_text.color = "#ff8c86"
+            finally:
+                e.control.disabled = True
+                self.page.update()
+
+        check_update_btn = ft.Button("Check App Update", icon=ft.Icons.REFRESH, on_click=check_app_update, bgcolor="#24211e", color="#d8d0c7")
+        pull_update_btn.on_click = pull_app_update
+
         diag = await self.run_bg(manager.diagnostics)
         self.body.controls.extend([
-            ft.Container(padding=16, border=ft.Border.all(1, "#39332b"), border_radius=10, bgcolor="#191714", content=ft.Column(controls=[mods_dir, factorio_version, exe, args, deps, ft.Row(controls=[ft.Button("Save Settings", icon=ft.Icons.SAVE, on_click=save), ft.Button("Backup state", icon=ft.Icons.BACKUP, on_click=backup)])])),
+            ft.Container(padding=16, border=ft.Border.all(1, "#39332b"), border_radius=10, bgcolor="#191714", content=ft.Column(controls=[
+                mods_dir, factorio_version, exe, args, deps,
+                ft.Row(wrap=True, controls=[ft.Button("Save Settings", icon=ft.Icons.SAVE, on_click=save), ft.Button("Backup state", icon=ft.Icons.BACKUP, on_click=backup)]),
+                ft.Divider(color="#39332b"),
+                ft.Text("Application Update", weight=ft.FontWeight.BOLD),
+                ft.Text("Checks this Git clone against origin/main and only pulls fast-forward updates.", size=11, color="#77716b"),
+                ft.Row(wrap=True, controls=[check_update_btn, pull_update_btn]),
+                app_update_text,
+            ])),
             ft.Container(padding=14, border=ft.Border.all(1, "#39332b"), border_radius=10, content=ft.Column(controls=[
                 ft.Text("Diagnostics", weight=ft.FontWeight.BOLD),
                 ft.Text(f'Mods dir: {diag["mods_dir"]}', size=11, color="#a69d93"),

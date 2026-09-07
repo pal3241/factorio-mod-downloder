@@ -168,6 +168,17 @@
                     <button class="ghost" id="launchFactorioBtn">Launch Factorio</button>
                 </div>
                 <p class="hint" id="modListPath"></p>
+
+                <div class="panel app-updater-panel">
+                    <h3>Application Update</h3>
+                    <p class="hint">Check this Git clone against <code>origin/main</code> and pull only fast-forward updates.</p>
+                    <div class="actions">
+                        <button class="ghost" id="checkAppUpdateBtn">Check App Update</button>
+                        <button id="pullAppUpdateBtn" disabled>Pull Update</button>
+                    </div>
+                    <p class="hint" id="appUpdateStatus">Not checked yet.</p>
+                </div>
+
                 <div id="diagnosticsBox"></div>
             </div>
         </section>

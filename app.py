@@ -233,6 +233,31 @@ def profile_delete():
         return fail(exc)
 
 
+@app.post("/api/mod/open-location")
+def open_mod_location():
+    try:
+        payload = request.get_json(silent=True) or {}
+        return ok(result=manager.open_mod_location(payload.get("mod", "")))
+    except ManagerError as exc:
+        return fail(exc)
+
+
+@app.get("/api/app-update")
+def app_update_status():
+    try:
+        return ok(status=manager.app_update_status(fetch=True))
+    except ManagerError as exc:
+        return fail(exc)
+
+
+@app.post("/api/app-update/pull")
+def app_update_pull():
+    try:
+        return ok(result=manager.pull_app_update())
+    except ManagerError as exc:
+        return fail(exc)
+
+
 @app.post("/api/launch")
 def launch_factorio():
     try:
