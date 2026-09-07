@@ -8,11 +8,12 @@ import shutil
 import subprocess
 import tempfile
 import zipfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 import hashlib
 import uuid
 
@@ -550,13 +551,80 @@ class FactorioModManager:
 
         return output
 
+    def _public_mod_details(self, names: list[str]) -> list[dict[str, Any]]:
+        # Fetch public full metadata for the visible page without credentials.
+        unique: list[str] = []
+        for raw_name in names:
+            name = unquote(str(raw_name or "")).strip()
+            if MOD_ID_RE.fullmatch(name) and name not in unique:
+                unique.append(name)
+
+        if not unique:
+            return []
+
+        by_name: dict[str, dict[str, Any]] = {}
+
+        def fetch_one(name: str):
+            return name, self.portal_mod(name)
+
+        with ThreadPoolExecutor(max_workers=min(8, len(unique))) as executor:
+            futures = [executor.submit(fetch_one, name) for name in unique]
+            for future in as_completed(futures):
+                try:
+                    name, data = future.result()
+                    by_name[name] = data
+                except Exception:
+                    # A deleted/private card should not fail the entire page.
+                    continue
+
+        ordered = [by_name[name] for name in unique if name in by_name]
+        return self._decorate_search_results(ordered)
+
+    @staticmethod
+    def _mod_names_from_portal_html(html: str, limit: int = 20) -> list[str]:
+        names: list[str] = []
+        for raw_name in re.findall(r"/mod/([A-Za-z0-9_.\-]+)", html, flags=re.IGNORECASE):
+            name = unquote(raw_name).strip()
+            if MOD_ID_RE.fullmatch(name) and name not in names:
+                names.append(name)
+            if len(names) >= limit:
+                break
+        return names
+
+    @staticmethod
+    def _portal_html_pagination(html: str, page: int, page_size: int, result_count: int) -> dict[str, int]:
+        count = 0
+        found = re.search(r"Found\s+([0-9][0-9.,\s]*)\s+mods?", html, flags=re.IGNORECASE)
+        if found:
+            digits = re.sub(r"\D", "", found.group(1))
+            if digits:
+                count = int(digits)
+
+        page_numbers = [int(value) for value in re.findall(r"[?&]page=(\d+)", html)]
+        if count:
+            page_count = max(1, (count + page_size - 1) // page_size)
+        elif page_numbers:
+            page_count = max(max(page_numbers), page)
+        else:
+            page_count = page
+
+        if not count:
+            count = result_count if page == 1 else max(result_count, (page - 1) * page_size + result_count)
+
+        return {
+            "count": count,
+            "page": page,
+            "page_count": page_count,
+            "page_size": page_size,
+        }
+
     def highlighted_mods(self, page: int = 1, page_size: int = 20) -> dict[str, Any]:
-        """Read the public weekly highlights page, then enrich IDs via the public API."""
         page = max(1, int(page))
-        page_size = max(1, min(int(page_size), 50))
+        page_size = max(1, min(int(page_size), 20))
         response = self.session.get(
             f"{MOD_PORTAL}/highlights",
             params={"page": page},
+            headers={"Accept": "text/html,application/xhtml+xml"},
             timeout=25,
         )
         try:
@@ -564,44 +632,12 @@ class FactorioModManager:
         except requests.RequestException as exc:
             raise ManagerError(f"Gagal mengambil highlighted mods: {exc}") from exc
 
-        html = response.text
-        names = []
-        for name in re.findall(r'href=["\\\']/mod/([^"\\\'/?#]+)', html, flags=re.IGNORECASE):
-            if name not in names:
-                names.append(name)
-        names = names[:page_size]
-
-        # The list API gives title/owner/summary/category/releases in one request.
-        if names:
-            params: list[tuple[str, str]] = [("hide_deprecated", "false"), ("page_size", "max")]
-            params.extend(("namelist", name) for name in names)
-            api_response = self.session.get(API_BASE, params=params, timeout=25)
-            try:
-                api_response.raise_for_status()
-            except requests.RequestException as exc:
-                raise ManagerError(f"Gagal mengambil metadata highlighted mods: {exc}") from exc
-            api_data = api_response.json()
-            by_name = {
-                item.get("name"): item
-                for item in (api_data.get("results", []) if isinstance(api_data, dict) else [])
-            }
-            ordered = [by_name[name] for name in names if name in by_name]
-        else:
-            ordered = []
-
-        # api/mods entries don't include thumbnails/tags; keep cards valid with fallbacks.
-        decorated = self._decorate_search_results(ordered)
-        page_numbers = [int(x) for x in re.findall(r'[?&]page=(\\d+)', html)]
-        page_count = max(page_numbers, default=page)
-
+        names = self._mod_names_from_portal_html(response.text, page_size)
+        results = self._public_mod_details(names)
+        pagination = self._portal_html_pagination(response.text, page, page_size, len(results))
         return {
-            "pagination": {
-                "count": page_count * page_size,
-                "page": page,
-                "page_count": page_count,
-                "page_size": page_size,
-            },
-            "results": decorated,
+            "pagination": pagination,
+            "results": results,
             "sort_attribute": "highlighted",
         }
 
@@ -620,15 +656,21 @@ class FactorioModManager:
         exclude_expansions: list[str] | None = None,
         show_deprecated: bool = False,
     ) -> dict[str, Any]:
+        # POST /api/search requires Factorio credentials. This manager is
+        # intentionally tokenless, so use public website routes to get ordered
+        # mod IDs and public /api/mods/<name>/full for metadata.
         allowed_sorts = {item["id"] for item in PORTAL_SORT_MODES}
         if sort_attribute not in allowed_sorts:
             raise ManagerError("Sort mode tidak valid.")
 
         page = max(1, int(page))
-        page_size = max(1, min(int(page_size), 50))
+        page_size = max(1, min(int(page_size), 20))
+        query = str(query or "").strip()
 
-        if sort_attribute == "highlighted":
+        if sort_attribute == "highlighted" and not query:
             return self.highlighted_mods(page=page, page_size=page_size)
+        if sort_attribute == "highlighted":
+            sort_attribute = "relevancy"
 
         category_ids = {item["id"] for item in PORTAL_CATEGORIES}
         tag_ids = {item["id"] for item in PORTAL_TAGS}
@@ -637,52 +679,55 @@ class FactorioModManager:
         def clean(values, allowed):
             return [value for value in (values or []) if value in allowed]
 
-        payload = {
-            "version": self.config["factorio_version"],
-            "lang": "en",
-            "is_space_age": False,
-            "username": "",
-            "token": "",
-            "query": str(query or "").strip(),
-            "sort_attribute": sort_attribute,
-            "only_bookmarks": False,
-            "show_deprecated": bool(show_deprecated),
-            "highlight_pre_tag": "",
-            "highlight_post_tag": "",
-            "expansion": clean(expansions, expansion_ids),
-            "exclude_expansion": clean(exclude_expansions, expansion_ids),
-            "category": clean(categories, category_ids),
-            "exclude_category": clean(exclude_categories, category_ids),
-            "tag": clean(tags, tag_ids),
-            "exclude_tag": clean(exclude_tags, tag_ids),
-            "page": page,
-            "page_size": page_size,
-        }
+        if query or sort_attribute == "relevancy":
+            endpoint = f"{MOD_PORTAL}/search"
+        else:
+            endpoint = {
+                "last_updated_at": f"{MOD_PORTAL}/browse/updated",
+                "most_downloads": f"{MOD_PORTAL}/browse/downloaded",
+                "trending": f"{MOD_PORTAL}/browse/trending",
+            }.get(sort_attribute, f"{MOD_PORTAL}/search")
 
-        response = self.session.post(
-            f"{MOD_PORTAL}/api/search",
-            json=payload,
+        params: list[tuple[str, str]] = [
+            ("factorio_version", factorio_branch(self.config["factorio_version"])),
+            ("sort_attribute", sort_attribute),
+            ("page", str(page)),
+        ]
+        if query:
+            params.append(("query", query))
+        if show_deprecated:
+            params.append(("show_deprecated", "true"))
+
+        for value in clean(categories, category_ids):
+            params.append(("category", value))
+        for value in clean(exclude_categories, category_ids):
+            params.append(("exclude_category", value))
+        for value in clean(tags, tag_ids):
+            params.append(("tag", value))
+        for value in clean(exclude_tags, tag_ids):
+            params.append(("exclude_tag", value))
+        for value in clean(expansions, expansion_ids):
+            params.append(("expansion", value))
+        for value in clean(exclude_expansions, expansion_ids):
+            params.append(("exclude_expansion", value))
+
+        response = self.session.get(
+            endpoint,
+            params=params,
+            headers={"Accept": "text/html,application/xhtml+xml"},
             timeout=30,
         )
         try:
             response.raise_for_status()
         except requests.RequestException as exc:
-            raise ManagerError(f"Factorio Mod Portal search error: {exc}") from exc
+            raise ManagerError(f"Factorio Mod Portal public search error: {exc}") from exc
 
-        data = response.json()
-        if not isinstance(data, dict):
-            raise ManagerError("Respons pencarian Mod Portal tidak valid.")
-
-        pagination = data.get("pagination") or {}
-        results = data.get("results") or []
+        names = self._mod_names_from_portal_html(response.text, page_size)
+        results = self._public_mod_details(names)
+        pagination = self._portal_html_pagination(response.text, page, page_size, len(results))
         return {
-            "pagination": {
-                "count": int(pagination.get("count") or 0),
-                "page": int(pagination.get("page") or page),
-                "page_count": int(pagination.get("page_count") or 1),
-                "page_size": int(pagination.get("page_size") or page_size),
-            },
-            "results": self._decorate_search_results(results),
+            "pagination": pagination,
+            "results": results,
             "sort_attribute": sort_attribute,
         }
 

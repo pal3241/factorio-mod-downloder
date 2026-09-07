@@ -277,7 +277,7 @@ class FactorioFletUI:
             "page": 1,
             "query": "",
             "categories": set(),
-            "exclude_categories": set(),
+            "exclude_categories": {"internal"},
             "tags": set(),
             "exclude_tags": set(),
             "expansions": set(),
@@ -289,9 +289,11 @@ class FactorioFletUI:
             hint_text="Search mods by title, ID, summary, or author...",
             prefix_icon=ft.Icons.SEARCH,
             expand=True,
-            bgcolor="#f1d7a4",
-            color="#34291d",
-            border_color="#8c6e46",
+            bgcolor="#171512",
+            color="#eee7df",
+            border_color="#49423a",
+            focused_border_color="#a56d32",
+            hint_style=ft.TextStyle(color="#77716b"),
         )
         result_count = ft.Text("Loading...", size=15, weight=ft.FontWeight.BOLD)
         results_col = ft.Column(spacing=10)
@@ -313,8 +315,8 @@ class FactorioFletUI:
                 tab_row.controls.append(ft.Button(
                     mode["label"],
                     on_click=choose,
-                    bgcolor="#e6a13d" if active else "#3b3834",
-                    color="#201509" if active else "#e8e0d6",
+                    bgcolor="#875a2e" if active else "#302d29",
+                    color="#f5e5d3" if active else "#d8d0c7",
                 ))
 
         def state_sets(group):
@@ -327,13 +329,14 @@ class FactorioFletUI:
         def add_filter_group(title, group, items):
             filters_col.controls.append(ft.Text(title, size=17, weight=ft.FontWeight.BOLD, color="#f2d29f"))
             for item in items:
-                include = ft.Checkbox(label=item["label"], value=False, expand=True)
-                exclude = ft.IconButton(icon=ft.Icons.BLOCK, tooltip=f'Exclude {item["label"]}', icon_color="#8f8a84")
+                inc_state, exc_state = state_sets(group)
+                include = ft.Checkbox(label=item["label"], value=item["id"] in inc_state, expand=True)
+                exclude = ft.IconButton(icon=ft.Icons.BLOCK, tooltip=f'Exclude {item["label"]}', icon_color="#d28b2f" if item["id"] in exc_state else "#77716b")
 
                 async def include_changed(e, item_id=item["id"], g=group, checkbox=include, ban=exclude):
                     inc, exc = state_sets(g)
                     if checkbox.value:
-                        inc.add(item_id); exc.discard(item_id); ban.icon_color = "#8f8a84"
+                        inc.add(item_id); exc.discard(item_id); ban.icon_color = "#77716b"
                     else:
                         inc.discard(item_id)
                     search_state["page"] = 1
@@ -344,9 +347,9 @@ class FactorioFletUI:
                     inc, exc = state_sets(g)
                     inc.discard(item_id); checkbox.value = False
                     if item_id in exc:
-                        exc.remove(item_id); ban.icon_color = "#8f8a84"
+                        exc.remove(item_id); ban.icon_color = "#77716b"
                     else:
-                        exc.add(item_id); ban.icon_color = "#f0aa00"
+                        exc.add(item_id); ban.icon_color = "#d28b2f"
                     search_state["page"] = 1
                     self.page.update()
                     await run_search(False)
@@ -551,8 +554,8 @@ class FactorioFletUI:
                         await run_search(False)
                     pagination.controls.append(ft.Button(
                         str(page_no), on_click=go_page,
-                        bgcolor="#e6a13d" if page_no == current_page else "#3b3834",
-                        color="#201509" if page_no == current_page else "#e8e0d6",
+                        bgcolor="#875a2e" if page_no == current_page else "#302d29",
+                        color="#f5e5d3" if page_no == current_page else "#d8d0c7",
                     ))
             except Exception as exc:
                 result_count.value = "Search failed"
@@ -560,7 +563,7 @@ class FactorioFletUI:
             self.page.update()
 
         set_tab_styles()
-        search_bar = ft.Row(controls=[query, ft.Button("Exact Lookup", on_click=exact_lookup), ft.Button("Search", icon=ft.Icons.SEARCH, on_click=submit_search)])
+        search_bar = ft.Row(controls=[query, ft.Button("Exact Lookup", on_click=exact_lookup, bgcolor="#24211e", color="#d8d0c7"), ft.Button("Search", icon=ft.Icons.SEARCH, on_click=submit_search, bgcolor="#2b2824", color="#e6ded5")])
         filter_panel = ft.Container(
             width=235,
             padding=14,

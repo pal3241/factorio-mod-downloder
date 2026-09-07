@@ -11,7 +11,7 @@ const state = {
         page: 1,
         pageSize: 20,
         categories: new Set(),
-        excludeCategories: new Set(),
+        excludeCategories: new Set(["internal"]),
         tags: new Set(),
         excludeTags: new Set(),
         expansions: new Set(),

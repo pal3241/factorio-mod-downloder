@@ -483,9 +483,9 @@ h3 { margin: 0 0 5px; }
 }
 .portal-tab:hover { background: linear-gradient(#5b5751, #403c37); }
 .portal-tab.active {
-    background: linear-gradient(#f3c06a, #d68d31);
-    color: #24190c;
-    box-shadow: inset 0 1px #ffe0a4;
+    background: linear-gradient(#936331, #76502c);
+    color: #f5e5d3;
+    box-shadow: inset 0 1px #a97945;
 }
 .portal-searchbar {
     display: grid;
@@ -498,12 +498,13 @@ h3 { margin: 0 0 5px; }
     border-radius: 7px;
 }
 .portal-searchbar input {
-    background: #f1d7a4;
-    color: #34291d;
-    border-color: #8c6e46;
+    background: #171512;
+    color: #eee7df;
+    border-color: #49423a;
     font-size: 17px;
 }
-.portal-searchbar input::placeholder { color: #74634d; }
+.portal-searchbar input:focus { border-color: #a56d32; }
+.portal-searchbar input::placeholder { color: #77716b; }
 .portal-browser {
     display: grid;
     grid-template-columns: 245px minmax(0, 1fr);
