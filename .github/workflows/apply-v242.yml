@@ -67,3 +67,5 @@ jobs:
             git commit -m "feat: restart automatically after app update pull"
             git push origin HEAD:main
           fi
+
+# rerun after patch-script quoting fix
