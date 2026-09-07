@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="id">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Factorio Mod Manager</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="app-shell">
+    <aside class="sidebar">
+        <div class="brand">
+            <div class="brand-mark">FM</div>
+            <div>
+                <strong>Factorio</strong>
+                <span>Mod Manager</span>
+            </div>
+        </div>
+
+        <nav>
+            <button class="nav-item active" data-view="installed">Installed</button>
+            <button class="nav-item" data-view="discover">Search Mods</button>
+            <button class="nav-item" data-view="updates">Updates</button>
+            <button class="nav-item" data-view="profiles">Profiles</button>
+            <button class="nav-item" data-view="settings">Settings</button>
+        </nav>
+
+        <div class="sidebar-foot">
+            <div class="status-dot"></div>
+            <span>No login / no token</span>
+        </div>
+    </aside>
+
+    <main>
+        <header class="topbar">
+            <div>
+                <p class="eyebrow">LOCAL MOD CONTROL</p>
+                <h1 id="pageTitle">Installed Mods</h1>
+            </div>
+            <button class="ghost" id="refreshBtn">Refresh</button>
+        </header>
+
+        <div id="toast"></div>
+
+        <section class="view active" id="view-installed">
+            <div class="stats">
+                <div class="stat">
+                    <span>Installed</span>
+                    <strong id="installedCount">0</strong>
+                </div>
+                <div class="stat">
+                    <span>Enabled</span>
+                    <strong id="enabledCount">0</strong>
+                </div>
+                <div class="stat">
+                    <span>Dependency Issues</span>
+                    <strong id="issueCount">0</strong>
+                </div>
+            </div>
+
+            <div id="issuePanel" class="panel hidden"></div>
+
+            <div class="toolbar">
+                <input id="installedFilter" placeholder="Filter installed mods...">
+            </div>
+
+            <div id="installedList" class="mod-list"></div>
+        </section>
+
+        <section class="view" id="view-discover">
+            <div class="portal-tabs" id="portalTabs"></div>
+
+            <div class="portal-searchbar">
+                <input id="modQuery" placeholder="Search mods by title, ID, summary, or author...">
+                <button id="lookupBtn" title="Open an exact Mod Portal URL or ID">Exact Lookup</button>
+                <button id="portalSearchBtn">Search</button>
+            </div>
+
+            <div id="lookupResult"></div>
+
+            <div class="portal-browser">
+                <aside class="portal-filters">
+                    <div class="filter-title">Expansion</div>
+                    <div id="expansionFilters"></div>
+
+                    <div class="filter-title">Categories</div>
+                    <div id="categoryFilters"></div>
+
+                    <div class="filter-title">Tags</div>
+                    <div id="tagFilters"></div>
+
+                    <div class="filter-title">Options</div>
+                    <label class="checkbox-row compact-check">
+                        <input type="checkbox" id="showDeprecated">
+                        <span>Include deprecated mods</span>
+                    </label>
+                    <button class="ghost reset-filters" id="resetPortalFilters">Reset filters</button>
+                </aside>
+
+                <div class="portal-results-wrap">
+                    <div class="portal-results-head">
+                        <div>
+                            <strong id="portalResultCount">Searching...</strong>
+                            <span id="portalResultSubtitle"></span>
+                        </div>
+                        <div class="portal-pagination" id="portalPaginationTop"></div>
+                    </div>
+
+                    <div id="portalResults" class="portal-results"></div>
+                    <div class="portal-pagination bottom" id="portalPaginationBottom"></div>
+                </div>
+            </div>
+        </section>
+
+        <section class="view" id="view-updates">
+            <div class="section-head">
+                <div>
+                    <h2>Mod Updates</h2>
+                    <p>Compare installed versions with compatible releases.</p>
+                </div>
+                <div class="actions">
+                    <button class="ghost" id="checkUpdatesBtn">Check</button>
+                    <button id="updateAllBtn">Update All</button>
+                </div>
+            </div>
+            <div id="updatesList" class="mod-list"></div>
+        </section>
+
+
+        <section class="view" id="view-profiles">
+            <div class="panel">
+                <h2>Profiles / Modpack snapshots</h2>
+                <p class="hint">Save exact installed versions and enable/disable state.</p>
+                <div class="search-row">
+                    <input id="profileName" placeholder="Example: Space Age Run">
+                    <button id="saveProfileBtn">Save Current</button>
+                </div>
+            </div>
+            <div id="profilesList" class="mod-list"></div>
+        </section>
+
+        <section class="view" id="view-settings">
+            <div class="panel settings-panel">
+                <h2>Manager Settings</h2>
+
+                <label>Factorio mods folder</label>
+                <input id="modsDir">
+
+                <label>Factorio version</label>
+                <input id="factorioVersion" placeholder="2.0 or 2.0.72">
+
+                <label>Factorio executable</label>
+                <input id="factorioExecutable" placeholder="C:\\Program Files\\Factorio\\bin\\x64\\factorio.exe">
+
+                <label>Launch arguments</label>
+                <input id="launchArgs" placeholder="Optional">
+
+                <label class="checkbox-row">
+                    <input type="checkbox" id="installDeps">
+                    <span>Automatically install required dependencies</span>
+                </label>
+
+                <div class="actions maintenance-actions">
+                    <button id="saveSettingsBtn">Save Settings</button>
+                    <button class="ghost" id="backupBtn">Backup State</button>
+                    <button class="ghost" id="repairBtn">Repair Dependencies</button>
+                    <button class="ghost" id="cleanDuplicatesBtn">Clean Duplicates</button>
+                    <button class="ghost" id="launchFactorioBtn">Launch Factorio</button>
+                </div>
+                <p class="hint" id="modListPath"></p>
+                <div id="diagnosticsBox"></div>
+            </div>
+        </section>
+    </main>
+</div>
+
+<div id="modal" class="modal hidden">
+    <div class="modal-card">
+        <button class="modal-close" id="modalClose">×</button>
+        <div id="modalBody"></div>
+    </div>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

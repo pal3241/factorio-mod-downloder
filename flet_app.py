@@ -1,0 +1,698 @@
+from __future__ import annotations
+
+import asyncio
+import sys
+from pathlib import Path
+
+import flet as ft
+
+from manager import FactorioModManager, ManagerError, BUILTIN_MODS
+from storage import app_data_dir
+
+APP_DIR = Path(__file__).resolve().parent
+manager = FactorioModManager(app_data_dir() / "manager-config.json")
+
+
+class FactorioFletUI:
+    def __init__(self, page: ft.Page):
+        self.page = page
+        self.current_index = 0
+        self.installed = []
+        self.issues = {"missing": [], "wrong_version": [], "incompatible": []}
+        self.current_mod = None
+        self.updates = []
+
+        page.title = "Factorio Mod Manager"
+        page.theme_mode = ft.ThemeMode.DARK
+        page.padding = 0
+        page.bgcolor = "#0e0d0c"
+        if not page.web:
+            page.window.width = 1180
+            page.window.height = 760
+            page.window.min_width = 840
+            page.window.min_height = 580
+
+        self.title = ft.Text("Installed Mods", size=28, weight=ft.FontWeight.BOLD)
+        self.status = ft.Text("Ready", size=12, color="#a69d93")
+        self.body = ft.Column(expand=True, scroll=ft.ScrollMode.AUTO, spacing=12)
+
+        self.nav = ft.NavigationRail(
+            selected_index=0,
+            label_type=ft.NavigationRailLabelType.ALL,
+            min_width=92,
+            group_alignment=-0.9,
+            bgcolor="#151310",
+            destinations=[
+                ft.NavigationRailDestination(icon=ft.Icons.INVENTORY_2_OUTLINED, selected_icon=ft.Icons.INVENTORY_2, label="Installed"),
+                ft.NavigationRailDestination(icon=ft.Icons.SEARCH, selected_icon=ft.Icons.TRAVEL_EXPLORE, label="Search"),
+                ft.NavigationRailDestination(icon=ft.Icons.UPDATE, selected_icon=ft.Icons.SYSTEM_UPDATE_ALT, label="Updates"),
+                ft.NavigationRailDestination(icon=ft.Icons.LAYERS_OUTLINED, selected_icon=ft.Icons.LAYERS, label="Profiles"),
+                ft.NavigationRailDestination(icon=ft.Icons.SETTINGS_OUTLINED, selected_icon=ft.Icons.SETTINGS, label="Settings"),
+            ],
+            on_change=self.on_nav,
+        )
+
+        self.root = ft.Row(
+            expand=True,
+            spacing=0,
+            controls=[
+                self.nav,
+                ft.VerticalDivider(width=1, color="#39332b"),
+                ft.Container(
+                    expand=True,
+                    padding=24,
+                    content=ft.Column(
+                        expand=True,
+                        controls=[
+                            ft.Row(
+                                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                                controls=[
+                                    ft.Column(spacing=2, controls=[ft.Text("LOCAL MOD CONTROL", size=10, color="#e48c30"), self.title]),
+                                    ft.Row(controls=[
+                                        ft.IconButton(icon=ft.Icons.REFRESH, tooltip="Refresh", on_click=self.refresh_current),
+                                        ft.Button("Launch Factorio", icon=ft.Icons.PLAY_ARROW, on_click=self.launch_factorio),
+                                    ]),
+                                ],
+                            ),
+                            ft.Divider(color="#39332b"),
+                            ft.Container(expand=True, content=self.body),
+                            ft.Divider(color="#39332b"),
+                            self.status,
+                        ],
+                    ),
+                ),
+            ],
+        )
+        page.add(self.root)
+
+    def set_status(self, text: str):
+        self.status.value = text
+        self.page.update()
+
+    def notify(self, message: str, error: bool = False):
+        self.page.show_dialog(
+            ft.SnackBar(
+                content=ft.Text(message),
+                bgcolor="#5b2f2b" if error else "#26351f",
+            )
+        )
+        self.page.update()
+
+    async def run_bg(self, func, *args, **kwargs):
+        return await asyncio.to_thread(func, *args, **kwargs)
+
+    async def on_nav(self, e):
+        self.current_index = int(e.control.selected_index)
+        await self.render_current()
+
+    async def refresh_current(self, e=None):
+        await self.render_current(force=True)
+
+    async def render_current(self, force=False):
+        titles = ["Installed Mods", "Search Mods", "Updates", "Profiles", "Settings"]
+        self.title.value = titles[self.current_index]
+        self.body.controls.clear()
+        self.set_status("Loading...")
+        try:
+            if self.current_index == 0:
+                await self.render_installed()
+            elif self.current_index == 1:
+                await self.render_discover()
+            elif self.current_index == 2:
+                await self.render_updates(check=force)
+            elif self.current_index == 3:
+                await self.render_profiles()
+            else:
+                await self.render_settings()
+            self.set_status("Ready")
+        except Exception as exc:
+            self.body.controls[:] = [ft.Text(str(exc), color="#ff8c86")]
+            self.set_status("Error")
+        self.page.update()
+
+    def stat_card(self, label, value, icon):
+        return ft.Container(
+            expand=True,
+            padding=16,
+            border=ft.Border.all(1, "#39332b"),
+            border_radius=10,
+            bgcolor="#191714",
+            content=ft.Row(controls=[
+                ft.Icon(icon, color="#e48c30"),
+                ft.Column(spacing=1, controls=[ft.Text(label, size=11, color="#a69d93"), ft.Text(str(value), size=24, weight=ft.FontWeight.BOLD)]),
+            ]),
+        )
+
+    async def render_installed(self):
+        self.installed = await self.run_bg(manager.list_installed)
+        self.issues = await self.run_bg(manager.dependency_issues)
+        diag = await self.run_bg(manager.diagnostics)
+        issue_count = sum(len(v) for v in self.issues.values())
+        self.body.controls.append(ft.Row(controls=[
+            self.stat_card("Installed", len(self.installed), ft.Icons.INVENTORY_2),
+            self.stat_card("Enabled", sum(1 for m in self.installed if m["enabled"]), ft.Icons.CHECK_CIRCLE_OUTLINE),
+            self.stat_card("Issues", issue_count, ft.Icons.WARNING_AMBER),
+            self.stat_card("Duplicates", len(diag["duplicates"]), ft.Icons.CONTENT_COPY),
+        ]))
+
+        search = ft.TextField(label="Filter installed mods", prefix_icon=ft.Icons.SEARCH)
+        list_col = ft.Column(spacing=8)
+
+        def build_rows(query=""):
+            q = query.lower().strip()
+            list_col.controls.clear()
+            for mod in self.installed:
+                if q and q not in f'{mod["title"]} {mod["name"]} {mod["version"]}'.lower():
+                    continue
+                toggle = ft.Switch(value=bool(mod["enabled"]), data=mod["name"], on_change=self.toggle_mod)
+                list_col.controls.append(
+                    ft.Container(
+                        padding=12,
+                        border=ft.Border.all(1, "#39332b"),
+                        border_radius=9,
+                        bgcolor="#191714",
+                        content=ft.Row(
+                            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                            controls=[
+                                ft.Row(expand=True, controls=[
+                                    ft.CircleAvatar(content=ft.Text((mod["title"] or mod["name"])[:2].upper()), bgcolor="#2a241d", color="#e48c30"),
+                                    ft.Column(expand=True, spacing=2, controls=[
+                                        ft.Text(mod["title"], weight=ft.FontWeight.BOLD),
+                                        ft.Text(f'{mod["name"]} · {mod["version"]} · Factorio {mod["factorio_version"] or "?"}', size=11, color="#a69d93"),
+                                        ft.Text(mod["file"], size=10, color="#70685f"),
+                                    ]),
+                                ]),
+                                ft.Row(controls=[
+                                    toggle,
+                                    ft.IconButton(icon=ft.Icons.SYSTEM_UPDATE_ALT, tooltip="Update", data=mod["name"], on_click=self.update_one),
+                                    ft.IconButton(icon=ft.Icons.DELETE_OUTLINE, tooltip="Remove", data=mod["name"], on_click=self.remove_one),
+                                ]),
+                            ],
+                        ),
+                    )
+                )
+            self.page.update()
+
+        search.on_change = lambda e: build_rows(e.control.value)
+        self.body.controls.append(search)
+
+        if issue_count:
+            issue_lines = []
+            for item in self.issues["missing"]:
+                issue_lines.append(ft.Text(f'Missing: {item["mod"]} → {item["requirement"]}', size=11, color="#e4b65f"))
+            for item in self.issues["wrong_version"]:
+                issue_lines.append(ft.Text(f'Version: {item["mod"]} → {item["requirement"]}', size=11, color="#e4b65f"))
+            for item in self.issues["incompatible"]:
+                issue_lines.append(ft.Text(f'Conflict: {item["mod"]} ↔ {item["dependency"]}', size=11, color="#ff8c86"))
+            self.body.controls.append(ft.Container(
+                padding=12, border=ft.Border.all(1, "#5c4828"), border_radius=9, bgcolor="#211c13",
+                content=ft.Column(controls=[
+                    ft.Row(alignment=ft.MainAxisAlignment.SPACE_BETWEEN, controls=[ft.Text("Dependency problems", weight=ft.FontWeight.BOLD), ft.Button("Repair", icon=ft.Icons.BUILD, on_click=self.repair_dependencies)]),
+                    *issue_lines,
+                ]),
+            ))
+
+        if diag["duplicates"]:
+            self.body.controls.append(ft.Row(controls=[ft.Text(f'{len(diag["duplicates"])} duplicate mod group(s) detected.'), ft.Button("Clean duplicates", on_click=self.clean_duplicates)]))
+        if diag["invalid_files"]:
+            self.body.controls.append(ft.Text(f'{len(diag["invalid_files"])} invalid mod file(s) detected.', color="#ff8c86"))
+
+        self.body.controls.append(list_col)
+        build_rows()
+
+    async def toggle_mod(self, e):
+        try:
+            await self.run_bg(manager.set_enabled, e.control.data, bool(e.control.value))
+            self.notify(f'{e.control.data} {"enabled" if e.control.value else "disabled"}.')
+        except Exception as exc:
+            e.control.value = not e.control.value
+            self.notify(str(exc), True)
+
+    async def update_one(self, e):
+        name = e.control.data
+        self.set_status(f"Updating {name}...")
+        try:
+            result = await self.run_bg(manager.update_one, name)
+            if result.get("updated"):
+                self.notify(f'{name}: {result["from"]} → {result["to"]}')
+            else:
+                self.notify(f'{name} already current.')
+            await self.render_current()
+        except Exception as exc:
+            self.notify(str(exc), True)
+            self.set_status("Ready")
+
+    async def remove_one(self, e):
+        name = e.control.data
+        async def do_remove(force=False):
+            try:
+                await self.run_bg(manager.remove, name, force)
+                self.notify(f"{name} removed.")
+                await self.render_current()
+            except Exception as exc:
+                self.notify(str(exc), True)
+        await do_remove(False)
+
+    async def repair_dependencies(self, e):
+        self.set_status("Repairing dependencies...")
+        try:
+            result = await self.run_bg(manager.repair_dependencies)
+            self.notify(f'Repaired {len(result["repaired"])} dependency mod(s).')
+            await self.render_current()
+        except Exception as exc:
+            self.notify(str(exc), True)
+
+    async def clean_duplicates(self, e):
+        try:
+            result = await self.run_bg(manager.clean_duplicates)
+            self.notify(f'Removed {len(result["removed"])} duplicate file(s).')
+            await self.render_current()
+        except Exception as exc:
+            self.notify(str(exc), True)
+
+    async def render_discover(self):
+        meta = await self.run_bg(manager.portal_search_meta)
+        search_state = {
+            "sort": "last_updated_at",
+            "page": 1,
+            "query": "",
+            "categories": set(),
+            "exclude_categories": set(),
+            "tags": set(),
+            "exclude_tags": set(),
+            "expansions": set(),
+            "exclude_expansions": set(),
+            "show_deprecated": False,
+        }
+
+        query = ft.TextField(
+            hint_text="Search mods by title, ID, summary, or author...",
+            prefix_icon=ft.Icons.SEARCH,
+            expand=True,
+            bgcolor="#f1d7a4",
+            color="#34291d",
+            border_color="#8c6e46",
+        )
+        result_count = ft.Text("Loading...", size=15, weight=ft.FontWeight.BOLD)
+        results_col = ft.Column(spacing=10)
+        pagination = ft.Row(spacing=4, alignment=ft.MainAxisAlignment.END)
+        tab_row = ft.Row(spacing=4, scroll=ft.ScrollMode.AUTO)
+        filters_col = ft.Column(spacing=2)
+        detail_box = ft.Column(spacing=8)
+
+        def set_tab_styles():
+            tab_row.controls.clear()
+            for mode in meta["sort_modes"]:
+                active = search_state["sort"] == mode["id"]
+                async def choose(e, mode_id=mode["id"]):
+                    search_state["sort"] = mode_id
+                    search_state["page"] = 1
+                    set_tab_styles()
+                    self.page.update()
+                    await run_search(False)
+                tab_row.controls.append(ft.Button(
+                    mode["label"],
+                    on_click=choose,
+                    bgcolor="#e6a13d" if active else "#3b3834",
+                    color="#201509" if active else "#e8e0d6",
+                ))
+
+        def state_sets(group):
+            if group == "category":
+                return search_state["categories"], search_state["exclude_categories"]
+            if group == "tag":
+                return search_state["tags"], search_state["exclude_tags"]
+            return search_state["expansions"], search_state["exclude_expansions"]
+
+        def add_filter_group(title, group, items):
+            filters_col.controls.append(ft.Text(title, size=17, weight=ft.FontWeight.BOLD, color="#f2d29f"))
+            for item in items:
+                include = ft.Checkbox(label=item["label"], value=False, expand=True)
+                exclude = ft.IconButton(icon=ft.Icons.BLOCK, tooltip=f'Exclude {item["label"]}', icon_color="#8f8a84")
+
+                async def include_changed(e, item_id=item["id"], g=group, checkbox=include, ban=exclude):
+                    inc, exc = state_sets(g)
+                    if checkbox.value:
+                        inc.add(item_id); exc.discard(item_id); ban.icon_color = "#8f8a84"
+                    else:
+                        inc.discard(item_id)
+                    search_state["page"] = 1
+                    self.page.update()
+                    await run_search(False)
+
+                async def exclude_clicked(e, item_id=item["id"], g=group, checkbox=include, ban=exclude):
+                    inc, exc = state_sets(g)
+                    inc.discard(item_id); checkbox.value = False
+                    if item_id in exc:
+                        exc.remove(item_id); ban.icon_color = "#8f8a84"
+                    else:
+                        exc.add(item_id); ban.icon_color = "#f0aa00"
+                    search_state["page"] = 1
+                    self.page.update()
+                    await run_search(False)
+
+                include.on_change = include_changed
+                exclude.on_click = exclude_clicked
+                filters_col.controls.append(ft.Row(spacing=0, controls=[include, exclude]))
+
+        add_filter_group("Expansion", "expansion", meta["expansions"])
+        add_filter_group("Categories", "category", meta["categories"])
+        add_filter_group("Tags", "tag", meta["tags"])
+
+        deprecated = ft.Checkbox(label="Include deprecated mods", value=False)
+        async def deprecated_changed(e):
+            search_state["show_deprecated"] = bool(deprecated.value)
+            search_state["page"] = 1
+            await run_search(False)
+        deprecated.on_change = deprecated_changed
+        filters_col.controls.extend([ft.Text("Options", size=17, weight=ft.FontWeight.BOLD, color="#f2d29f"), deprecated])
+
+        async def exact_lookup(e=None):
+            value = query.value.strip()
+            if not value:
+                return
+            self.set_status("Loading mod details...")
+            detail_box.controls[:] = [ft.ProgressRing()]
+            self.page.update()
+            try:
+                mod = await self.run_bg(manager.portal_view, value)
+                branch = ".".join(str(manager.config["factorio_version"]).split(".")[:2])
+                releases = [r for r in mod["releases"] if ".".join(str(r["factorio_version"] or "").split(".")[:2]) == branch]
+                if not releases:
+                    detail_box.controls[:] = [ft.Container(
+                        padding=12, border=ft.Border.all(1, "#5c302d"), border_radius=8,
+                        content=ft.Text(f'No compatible release for Factorio {branch}.', color="#ff8c86"),
+                    )]
+                    return
+
+                versions = ft.Dropdown(
+                    label="Version",
+                    value=releases[0]["version"],
+                    options=[ft.DropdownOption(key=r["version"], text=f'{r["version"]} — Factorio {r["factorio_version"]}') for r in releases],
+                    expand=True,
+                )
+
+                async def install_selected(ev):
+                    self.set_status(f'Installing {mod["name"]}...')
+                    try:
+                        result = await self.run_bg(manager.install, mod["name"], versions.value, None, True)
+                        self.notify(f'Installed {mod["title"]} {versions.value}.' if result["installed"] else f'{mod["title"]} already current.')
+                        await run_search(False)
+                    except Exception as exc:
+                        self.notify(str(exc), True)
+                    finally:
+                        self.set_status("Ready")
+
+                if mod.get("thumbnail"):
+                    icon = ft.Image(src=mod["thumbnail"], width=82, height=82, fit=ft.BoxFit.COVER)
+                else:
+                    icon = ft.Container(width=82, height=82, alignment=ft.Alignment.CENTER, bgcolor="#3a3733", content=ft.Text((mod["title"] or mod["name"])[:2].upper(), size=24, weight=ft.FontWeight.BOLD, color="#f2b25c"))
+
+                detail_box.controls[:] = [ft.Container(
+                    padding=14,
+                    bgcolor="#191714",
+                    border=ft.Border.all(1, "#493f34"),
+                    border_radius=9,
+                    content=ft.Column(spacing=10, controls=[
+                        ft.Row(vertical_alignment=ft.CrossAxisAlignment.START, controls=[
+                            icon,
+                            ft.Column(expand=True, spacing=4, controls=[
+                                ft.Text(mod["title"], size=20, weight=ft.FontWeight.BOLD, color="#f3d6a5"),
+                                ft.Text(f'by {mod["owner"]} · {mod["downloads_count"]:,} downloads', size=11, color="#e99828"),
+                                ft.Text(mod["summary"], size=12, color="#d8d0c7"),
+                            ]),
+                        ]),
+                        ft.Row(controls=[versions, ft.Button("Install", icon=ft.Icons.DOWNLOAD, bgcolor="#49b65b", color="#07160a", on_click=install_selected)]),
+                    ]),
+                )]
+            except Exception as exc:
+                detail_box.controls[:] = [ft.Text(str(exc), color="#ff8c86")]
+            finally:
+                self.set_status("Ready")
+                self.page.update()
+
+        async def submit_search(e=None):
+            search_state["query"] = query.value.strip()
+            if search_state["query"] and search_state["sort"] == "highlighted":
+                search_state["sort"] = "relevancy"
+                set_tab_styles()
+            search_state["page"] = 1
+            await run_search(False)
+
+        query.on_submit = submit_search
+
+        def pretty_downloads(n):
+            n = int(n or 0)
+            if n >= 1_000_000:
+                return f"{n/1_000_000:.1f}M"
+            if n >= 1_000:
+                return f"{n/1_000:.1f}K"
+            return str(n)
+
+        async def run_search(reset=False):
+            if reset:
+                search_state["page"] = 1
+            result_count.value = "Searching Mod Portal..."
+            results_col.controls[:] = [ft.ProgressRing()]
+            pagination.controls.clear()
+            self.page.update()
+            try:
+                data = await self.run_bg(
+                    manager.search_mods,
+                    search_state["query"],
+                    sort_attribute=search_state["sort"],
+                    page=search_state["page"],
+                    page_size=20,
+                    categories=list(search_state["categories"]),
+                    exclude_categories=list(search_state["exclude_categories"]),
+                    tags=list(search_state["tags"]),
+                    exclude_tags=list(search_state["exclude_tags"]),
+                    expansions=list(search_state["expansions"]),
+                    exclude_expansions=list(search_state["exclude_expansions"]),
+                    show_deprecated=search_state["show_deprecated"],
+                )
+                p = data["pagination"]
+                search_state["page"] = p["page"]
+                result_count.value = f'{p["count"]:,} mods found'
+                results_col.controls.clear()
+
+                for mod in data["results"]:
+                    async def install_mod(e, name=mod["name"]):
+                        self.set_status(f"Installing {name}...")
+                        try:
+                            result = await self.run_bg(manager.install, name, None, None, True)
+                            self.notify(f'Installed {name}.' if result["installed"] else f'{name} already current.')
+                            await run_search(False)
+                        except Exception as exc:
+                            self.notify(str(exc), True)
+                        finally:
+                            self.set_status("Ready")
+
+                    async def open_details(e, name=mod["name"]):
+                        query.value = name
+                        await exact_lookup()
+
+                    tags = ft.Row(spacing=4, wrap=True, controls=[
+                        ft.Container(
+                            padding=ft.Padding.symmetric(horizontal=8, vertical=5),
+                            bgcolor="#373431", border=ft.Border.all(1, "#4a4641"), border_radius=3,
+                            content=ft.Text(next((x["label"] for x in meta["tags"] if x["id"] == tag), tag), size=10, color="#c9c2ba"),
+                        ) for tag in (mod.get("tags") or [])
+                    ])
+                    if not tags.controls:
+                        tags.controls.append(ft.Text("No tags", size=10, color="#77716b"))
+
+                    if mod.get("thumbnail"):
+                        thumb = ft.Image(src=mod["thumbnail"], width=125, height=125, fit=ft.BoxFit.COVER)
+                    else:
+                        thumb = ft.Container(width=125, height=125, alignment=ft.Alignment.CENTER, bgcolor="#3a3733", content=ft.Text((mod["title"] or mod["name"])[:2].upper(), size=30, weight=ft.FontWeight.BOLD, color="#f2b25c"))
+
+                    local = mod.get("installed")
+                    if local and not mod.get("update_available"):
+                        install_btn = ft.Button(f'Installed {local["version"]}', disabled=True)
+                    else:
+                        label = "Update" if local else "Download"
+                        install_btn = ft.Button(label, icon=ft.Icons.DOWNLOAD, bgcolor="#49b65b", color="#07160a", on_click=install_mod)
+
+                    result_body = ft.Row(
+                        vertical_alignment=ft.CrossAxisAlignment.START,
+                        controls=[
+                            thumb,
+                            ft.Column(expand=True, spacing=5, controls=[
+                                ft.TextButton(mod["title"], on_click=open_details, style=ft.ButtonStyle(color="#f3d6a5")),
+                                ft.Text(f'by {mod["owner"]}', size=11, color="#e99828"),
+                                ft.Text(mod["summary"], size=12, color="#eee8df", max_lines=3),
+                                tags,
+                            ]),
+                            ft.Column(width=150, spacing=5, controls=[
+                                ft.Text(mod.get("category") or "no-category", size=11),
+                                ft.Text(f'Factorio {mod.get("factorio_version_display") or "?"}', size=11),
+                                ft.Text(f'↓ {pretty_downloads(mod.get("downloads_count"))}', size=11),
+                                ft.Text("Space Age" if mod.get("requires_space_age") else "", size=10, color="#cab9ff"),
+                                install_btn,
+                            ]),
+                        ],
+                    )
+                    results_col.controls.append(ft.Container(
+                        padding=12,
+                        bgcolor="#2d2b29",
+                        border=ft.Border.all(1, "#49443e"),
+                        border_radius=6,
+                        content=result_body,
+                    ))
+
+                page_count = int(p.get("page_count") or 1)
+                current_page = int(p.get("page") or 1)
+                candidate_pages = sorted({1, page_count, current_page - 1, current_page, current_page + 1})
+                candidate_pages = [x for x in candidate_pages if 1 <= x <= page_count]
+                for page_no in candidate_pages:
+                    async def go_page(e, target=page_no):
+                        search_state["page"] = target
+                        await run_search(False)
+                    pagination.controls.append(ft.Button(
+                        str(page_no), on_click=go_page,
+                        bgcolor="#e6a13d" if page_no == current_page else "#3b3834",
+                        color="#201509" if page_no == current_page else "#e8e0d6",
+                    ))
+            except Exception as exc:
+                result_count.value = "Search failed"
+                results_col.controls[:] = [ft.Text(str(exc), color="#ff8c86")]
+            self.page.update()
+
+        set_tab_styles()
+        search_bar = ft.Row(controls=[query, ft.Button("Exact Lookup", on_click=exact_lookup), ft.Button("Search", icon=ft.Icons.SEARCH, on_click=submit_search)])
+        filter_panel = ft.Container(
+            width=235,
+            padding=14,
+            bgcolor="#211f1c",
+            border=ft.Border.all(1, "#403a33"),
+            border_radius=7,
+            content=filters_col,
+        )
+        results_panel = ft.Column(expand=True, spacing=9, controls=[
+            ft.Row(alignment=ft.MainAxisAlignment.SPACE_BETWEEN, controls=[result_count, pagination]),
+            results_col,
+        ])
+
+        self.body.controls.extend([
+            tab_row,
+            search_bar,
+            detail_box,
+            ft.Row(vertical_alignment=ft.CrossAxisAlignment.START, controls=[filter_panel, results_panel]),
+        ])
+        await run_search(False)
+
+    async def render_updates(self, check=False):
+        if check or not self.updates:
+            self.updates = await self.run_bg(manager.check_updates)
+        update_count = sum(1 for x in self.updates if x.get("update_available"))
+        self.body.controls.append(ft.Row(alignment=ft.MainAxisAlignment.SPACE_BETWEEN, controls=[
+            ft.Text(f"{update_count} update(s) available", size=16),
+            ft.Row(controls=[ft.Button("Check", on_click=self.check_updates), ft.Button("Update All", icon=ft.Icons.SYSTEM_UPDATE_ALT, on_click=self.update_all)]),
+        ]))
+        for item in self.updates:
+            async def do_update(e, name=item["name"]):
+                e.control.data = name
+                await self.update_one(e)
+            self.body.controls.append(ft.Container(
+                padding=12, border=ft.Border.all(1, "#39332b"), border_radius=9, bgcolor="#191714",
+                content=ft.Row(alignment=ft.MainAxisAlignment.SPACE_BETWEEN, controls=[
+                    ft.Column(spacing=2, controls=[ft.Text(item["title"] or item["name"], weight=ft.FontWeight.BOLD), ft.Text(f'{item["installed"]} → {item["latest"] or "?"}', size=11, color="#a69d93")]),
+                    ft.Button("Update", on_click=do_update) if item.get("update_available") else ft.Text("Current" if not item.get("error") else "Unavailable", color="#8fbf75" if not item.get("error") else "#ff8c86"),
+                ]),
+            ))
+
+    async def check_updates(self, e):
+        self.updates = await self.run_bg(manager.check_updates)
+        await self.render_current()
+
+    async def update_all(self, e):
+        self.set_status("Updating all mods...")
+        try:
+            result = await self.run_bg(manager.update_all)
+            self.notify(f'Updated {len(result["updated"])} mod(s); {len(result["errors"])} failed.')
+            self.updates = []
+            await self.render_current(force=True)
+        except Exception as exc:
+            self.notify(str(exc), True)
+
+    async def render_profiles(self):
+        profiles = await self.run_bg(manager.list_profiles)
+        name = ft.TextField(label="New profile name", expand=True)
+        async def save(e):
+            try:
+                result = await self.run_bg(manager.save_profile, name.value)
+                self.notify(f'Profile {result["name"]} saved.')
+                await self.render_current()
+            except Exception as exc: self.notify(str(exc), True)
+        self.body.controls.append(ft.Row(controls=[name, ft.Button("Save current", icon=ft.Icons.SAVE, on_click=save)]))
+        self.body.controls.append(ft.Text("Profiles snapshot installed versions + enabled state.", size=11, color="#a69d93"))
+        for profile in profiles:
+            async def apply(e, n=profile["name"]):
+                self.set_status(f"Applying profile {n}...")
+                try:
+                    result = await self.run_bg(manager.apply_profile, n)
+                    self.notify(f'Applied {n}; {len(result["errors"])} error(s).')
+                    self.set_status("Ready")
+                except Exception as exc: self.notify(str(exc), True)
+            async def delete(e, n=profile["name"]):
+                try:
+                    await self.run_bg(manager.delete_profile, n); self.notify(f'Deleted {n}.'); await self.render_current()
+                except Exception as exc: self.notify(str(exc), True)
+            self.body.controls.append(ft.Container(
+                padding=12, border=ft.Border.all(1, "#39332b"), border_radius=9, bgcolor="#191714",
+                content=ft.Row(alignment=ft.MainAxisAlignment.SPACE_BETWEEN, controls=[
+                    ft.Column(spacing=2, controls=[ft.Text(profile["name"], weight=ft.FontWeight.BOLD), ft.Text(f'{profile["mod_count"]} mods · Factorio {profile["factorio_version"]}', size=11, color="#a69d93")]),
+                    ft.Row(controls=[ft.Button("Apply", on_click=apply), ft.IconButton(icon=ft.Icons.DELETE_OUTLINE, on_click=delete)]),
+                ]),
+            ))
+
+    async def render_settings(self):
+        cfg = manager.get_config()
+        mods_dir = ft.TextField(label="Factorio mods folder", value=cfg.get("mods_dir", ""))
+        factorio_version = ft.TextField(label="Factorio version", value=cfg.get("factorio_version", "2.0"))
+        exe = ft.TextField(label="Factorio executable", value=cfg.get("factorio_executable", ""), hint_text="C:\\Program Files\\Factorio\\bin\\x64\\factorio.exe")
+        args = ft.TextField(label="Launch arguments", value=cfg.get("launch_args", ""))
+        deps = ft.Switch(label="Automatically install required dependencies", value=bool(cfg.get("install_dependencies", True)))
+        async def save(e):
+            try:
+                await self.run_bg(manager.save_config, {
+                    "mods_dir": mods_dir.value.strip(), "factorio_version": factorio_version.value.strip(),
+                    "install_dependencies": deps.value, "factorio_executable": exe.value.strip(), "launch_args": args.value.strip(),
+                })
+                self.notify("Settings saved.")
+            except Exception as exc: self.notify(str(exc), True)
+        async def backup(e):
+            try:
+                r = await self.run_bg(manager.backup_state, "flet"); self.notify(f'Backup: {r["path"]}')
+            except Exception as exc: self.notify(str(exc), True)
+        diag = await self.run_bg(manager.diagnostics)
+        self.body.controls.extend([
+            ft.Container(padding=16, border=ft.Border.all(1, "#39332b"), border_radius=10, bgcolor="#191714", content=ft.Column(controls=[mods_dir, factorio_version, exe, args, deps, ft.Row(controls=[ft.Button("Save Settings", icon=ft.Icons.SAVE, on_click=save), ft.Button("Backup state", icon=ft.Icons.BACKUP, on_click=backup)])])),
+            ft.Container(padding=14, border=ft.Border.all(1, "#39332b"), border_radius=10, content=ft.Column(controls=[
+                ft.Text("Diagnostics", weight=ft.FontWeight.BOLD),
+                ft.Text(f'Mods dir: {diag["mods_dir"]}', size=11, color="#a69d93"),
+                ft.Text(f'Installed: {diag["installed_count"]} · Enabled: {diag["enabled_count"]} · Dependency issues: {diag["dependency_issue_count"]}', size=11, color="#a69d93"),
+                ft.Text(f'Duplicates: {len(diag["duplicates"])} · Invalid files: {len(diag["invalid_files"])}', size=11, color="#a69d93"),
+            ])),
+        ])
+
+    async def launch_factorio(self, e):
+        try:
+            result = await self.run_bg(manager.launch_factorio)
+            self.notify(f'Factorio started (PID {result["pid"]}).')
+        except Exception as exc:
+            self.notify(str(exc), True)
+
+
+async def main(page: ft.Page):
+    ui = FactorioFletUI(page)
+    await ui.render_current()
+
+
+if __name__ == "__main__":
+    mode = "app"
+    if "--web" in sys.argv:
+        mode = "web"
+    view = ft.AppView.WEB_BROWSER if mode == "web" else ft.AppView.FLET_APP
+    ft.run(main, view=view, port=8550 if mode == "web" else 0)

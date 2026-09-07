@@ -1,0 +1,4 @@
+Flask>=3.0,<4
+requests>=2.31,<3
+packaging>=24,<27
+flet[all]>=0.86.5,<0.87
