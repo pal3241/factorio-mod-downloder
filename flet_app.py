@@ -264,10 +264,10 @@ class FactorioFletUI:
                 maximum = setting.get("maximum_value")
                 if minimum is not None or maximum is not None:
                     helper.append(f'range: {minimum if minimum is not None else "-∞"} .. {maximum if maximum is not None else "∞"}')
+                helper_line = " · ".join(helper)
                 control = ft.TextField(
                     label=label,
                     value=value_text(current),
-                    helper_text=" · ".join(helper),
                     disabled=disabled,
                     dense=True,
                 )
@@ -285,6 +285,7 @@ class FactorioFletUI:
                 border_radius=8,
                 content=ft.Column(spacing=5, controls=[
                     control,
+                    *([ft.Text(helper_line, size=9, color="#77716b")] if setting.get("type") != "bool-setting" else []),
                     ft.Text(details, size=9, color="#77716b"),
                 ]),
             )
