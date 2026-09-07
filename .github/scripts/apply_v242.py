@@ -10,10 +10,7 @@ def replace_once(path: Path, old: str, new: str):
     path.write_text(text.replace(old, new, 1), encoding="utf-8")
 
 
-# Shared restart helper. It spawns a tiny detached relauncher, then exits the
-# current process. The relauncher waits briefly before starting the same command,
-# which avoids port conflicts for Flask/Flet web mode.
-(ROOT / "process_restart.py").write_text(r'''from __future__ import annotations
+process_restart_source = r"""from __future__ import annotations
 
 import json
 import os
@@ -24,7 +21,7 @@ from pathlib import Path
 
 
 def current_process_command() -> list[str]:
-    """Return a command that starts the current application again."""
+    # Return a command that starts the current application again.
     if getattr(sys, "frozen", False):
         return [sys.executable, *sys.argv[1:]]
 
@@ -35,12 +32,7 @@ def current_process_command() -> list[str]:
 
 
 def schedule_restart(project_root: Path | str | None = None, delay: float = 0.8) -> dict:
-    """Schedule a clean restart without blocking the current UI response.
-
-    A detached Python relauncher waits until the old process has had time to
-    terminate, then starts the exact same command. This is intentionally used
-    only after a successful source `git pull`.
-    """
+    # Schedule a clean restart without blocking the current UI response.
     cwd = str(Path(project_root or Path.cwd()).resolve())
     command = current_process_command()
 
@@ -87,7 +79,8 @@ subprocess.Popen(cmd, **kwargs)
     timer.daemon = True
     timer.start()
     return {"scheduled": True, "delay": float(delay), "command": command, "cwd": cwd}
-''', encoding="utf-8")
+"""
+(ROOT / "process_restart.py").write_text(process_restart_source, encoding="utf-8")
 
 # Flet app: restart automatically after a successful pull.
 flet_path = ROOT / "flet_app.py"
@@ -123,11 +116,8 @@ replace_once(
     '''async function waitForAppRestart(attempt = 0) {\n    if (attempt > 30) {\n        const statusEl = $("appUpdateStatus");\n        statusEl.textContent = "Update installed, but the restarted server did not respond yet. Refresh this page manually.";\n        return;\n    }\n    try {\n        const response = await fetch(`/api/config?restart_check=${Date.now()}`, {cache: "no-store"});\n        if (response.ok) {\n            window.location.reload();\n            return;\n        }\n    } catch (_) {}\n    setTimeout(() => waitForAppRestart(attempt + 1), 700);\n}\n\nasync function pullAppUpdate() {\n    const button = $("pullAppUpdateBtn");\n    const statusEl = $("appUpdateStatus");\n    busy(button, true, "Pulling...");\n    try {\n        const data = await api("/api/app-update/pull", {method:"POST", body:"{}"});\n        if (data.result.changed) {\n            const after = data.result.after || {};\n            statusEl.textContent = `Updated to ${after.local_short || "new commit"}. Restarting automatically...`;\n            toast("Update pulled. Restarting Factorio Mod Manager...");\n            setTimeout(() => waitForAppRestart(), 1500);\n        } else {\n            statusEl.textContent = "Already up to date.";\n            toast("Already up to date.");\n        }\n    } catch(err) {\n        statusEl.textContent = err.message;\n        toast(err.message, "error");\n    } finally { button.disabled = true; }\n}\n''',
 )
 
-# Version bump.
 replace_once(ROOT / "pyproject.toml", 'version = "2.4.1"', 'version = "2.4.2"')
 
-# Regression test: no process exit is triggered; only command construction and
-# integration markers are checked.
 (ROOT / "tests" / "test_auto_restart_update.py").write_text(r'''from pathlib import Path
 import sys
 
