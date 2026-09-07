@@ -233,6 +233,23 @@ def profile_delete():
         return fail(exc)
 
 
+@app.get("/api/mod/settings")
+def get_mod_settings():
+    try:
+        return ok(settings=manager.mod_settings_state(request.args.get("mod", "")))
+    except ManagerError as exc:
+        return fail(exc)
+
+
+@app.post("/api/mod/settings")
+def save_mod_settings():
+    try:
+        payload = request.get_json(silent=True) or {}
+        return ok(result=manager.save_mod_settings(payload.get("mod", ""), payload.get("changes") or {}))
+    except ManagerError as exc:
+        return fail(exc)
+
+
 @app.post("/api/mod/open-location")
 def open_mod_location():
     try:

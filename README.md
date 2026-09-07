@@ -130,3 +130,12 @@ Both Flask Web and Flet Desktop/Web now include a Mod Portal-inspired browser:
 - Exact Lookup remains available for pasting a Mod Portal URL or internal mod ID
 
 The search data comes from the public Mod Portal browse/search interfaces. Downloads still use the configured community mirror flow and are SHA-1 verified before installation.
+
+
+## Real per-mod settings editor (2.4)
+
+The Settings button for an installed mod now scans all three Factorio settings-stage files
+(`settings.lua`, `settings-updates.lua`, and `settings-final-fixes.lua`), decodes the local
+`mod-settings.dat` PropertyTree, and exposes Startup / Map / Per-player values in both Flet
+and Flask UIs. Saves are validated, backed up, written atomically, and re-read before success
+is reported. Close Factorio before writing settings.

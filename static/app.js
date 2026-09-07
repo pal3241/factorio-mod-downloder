@@ -151,28 +151,85 @@ function closeModal() {
     $("modalBody").innerHTML = "";
 }
 
-function openModSettings(name) {
+function formatModSettingValue(value) {
+    if (value && typeof value === "object" && !Array.isArray(value) && ["r","g","b"].every(k => k in value)) {
+        return ["r","g","b","a"].map(k => value[k] ?? (k === "a" ? 1 : 0)).join(", ");
+    }
+    return value == null ? "" : String(value);
+}
+
+function modSettingInputHTML(setting) {
+    const name = escapeHTML(setting.name);
+    const label = escapeHTML(setting.display_name || setting.name);
+    const disabled = setting.editable ? "" : "disabled";
+    const current = setting.current_value;
+    const allowed = setting.allowed_values || [];
+    let input;
+    if (setting.type === "bool-setting") {
+        input = `<label class="mod-setting-bool"><input type="checkbox" data-setting-value="${name}" data-setting-type="bool-setting" ${current ? "checked" : ""} ${disabled}><span>${label}</span></label>`;
+    } else if (allowed.length) {
+        input = `<label>${label}<select data-setting-value="${name}" data-setting-type="${escapeHTML(setting.type)}" ${disabled}>${allowed.map(value => `<option value="${escapeHTML(value)}" ${String(value) === String(current) ? "selected" : ""}>${escapeHTML(value)}</option>`).join("")}</select></label>`;
+    } else {
+        const numeric = ["int-setting","double-setting"].includes(setting.type);
+        const min = setting.minimum_value != null ? ` min="${escapeHTML(setting.minimum_value)}"` : "";
+        const max = setting.maximum_value != null ? ` max="${escapeHTML(setting.maximum_value)}"` : "";
+        input = `<label>${label}<input type="${numeric ? "number" : "text"}" ${setting.type === "double-setting" ? 'step="any"' : ""}${min}${max} value="${escapeHTML(formatModSettingValue(current))}" data-setting-value="${name}" data-setting-type="${escapeHTML(setting.type)}" ${disabled}></label>`;
+    }
+    const details = `${escapeHTML(setting.type || "setting")} · ${name} · source: ${escapeHTML(setting.source || "?")}${setting.detected_from_dat ? " · DAT fallback" : ""}`;
+    return `<div class="real-setting-row">${input}<div class="real-setting-meta">${details}</div></div>`;
+}
+
+async function openModSettings(name) {
     const mod = state.installed.find(item => item.name === name);
     if (!mod) { toast(`Mod ${name} not found.`, "error"); return; }
+    $("modalBody").innerHTML = `<div class="empty">Reading mod-settings.dat...</div>`;
+    $("modal").classList.remove("hidden");
+
+    let settingState;
+    try {
+        const data = await api(`/api/mod/settings?mod=${encodeURIComponent(name)}`);
+        settingState = data.settings;
+    } catch (err) {
+        $("modalBody").innerHTML = `<div class="error-box">${escapeHTML(err.message)}</div>`;
+        return;
+    }
+
+    const sectionLabels = {"startup":"Startup", "runtime-global":"Map", "runtime-per-user":"Per player"};
+    const sectionNotes = {
+        "startup":"Requires a Factorio restart after changes.",
+        "runtime-global":"Existing saves can synchronize/override map runtime values.",
+        "runtime-per-user":"Local per-player runtime values.",
+    };
+    const sections = ["startup","runtime-global","runtime-per-user"].map(section => {
+        const items = (settingState.settings || []).filter(item => item.setting_type === section);
+        if (!items.length) return "";
+        return `<section class="real-setting-section"><h3>${sectionLabels[section]}</h3><p class="hint">${sectionNotes[section]}</p>${items.map(modSettingInputHTML).join("")}</section>`;
+    }).join("");
+    const warnings = (settingState.warnings || []).map(text => `<div class="mod-setting-warning">⚠ ${escapeHTML(text)}</div>`).join("");
     const deps = (mod.dependencies || []).map(dep => `<div class="mod-setting-dep">• ${escapeHTML(dep.raw || dep.name || "")}</div>`).join("") || `<div class="hint">No declared dependencies.</div>`;
+    const files = (settingState.settings_files || []).join(", ") || "none detected";
+    const hasEditors = (settingState.settings || []).some(item => item.editable);
+
     $("modalBody").innerHTML = `
         <div class="mod-settings-head"><div class="mod-icon">${escapeHTML((mod.title || mod.name).slice(0,2).toUpperCase())}</div><div><h2>${escapeHTML(mod.title || mod.name)}</h2><p>${escapeHTML(mod.name)} · v${escapeHTML(mod.version)} · Factorio ${escapeHTML(mod.factorio_version || "?")}</p></div></div>
         <div class="mod-settings-grid">
             <div><span>Author</span><strong>${escapeHTML(mod.author || "?")}</strong></div>
-            <div><span>Type</span><strong>${escapeHTML(mod.kind || "?")}</strong></div>
-            <div><span>In-game settings</span><strong>${mod.has_settings ? "settings.lua detected" : "None declared"}</strong></div>
-            <div><span>File</span><strong>${escapeHTML(mod.file || "?")}</strong></div>
+            <div><span>Settings stage</span><strong>${escapeHTML(files)}</strong></div>
+            <div><span>mod-settings.dat</span><strong>${escapeHTML(settingState.dat_version || "not available")}</strong></div>
+            <div><span>Editable</span><strong>${settingState.editable_count || 0}</strong></div>
         </div>
         <label class="checkbox-row"><input type="checkbox" id="modalModEnabled" ${mod.enabled ? "checked" : ""}><span>Enabled</span></label>
+        ${settingState.factorio_running ? `<div class="mod-setting-warning">Factorio is running. Close it before saving settings.</div>` : ""}
+        ${warnings}
+        <div class="real-settings-editor">${sections || `<div class="empty">No editable Factorio settings detected for this mod.</div>`}</div>
         <div class="dependency-preview"><strong>Dependencies</strong>${deps}</div>
-        ${mod.has_settings ? `<p class="hint good-note">Gameplay values are configured in Factorio → Settings → Mod settings.</p>` : ""}
         <div class="actions mod-settings-actions">
             <button class="ghost" id="modalOpenFolder">Open Folder</button>
             <button class="ghost" id="modalOpenPortal">Mod Portal</button>
-            <button id="modalUpdateMod">Check / Update</button>
+            <button class="ghost" id="modalUpdateMod">Check / Update</button>
+            <button id="modalSaveSettings" ${!hasEditors || !settingState.dat_exists ? "disabled" : ""}>Save Changes</button>
         </div>
         <p class="hint" id="modalModStatus"></p>`;
-    $("modal").classList.remove("hidden");
 
     $("modalModEnabled").addEventListener("change", async e => {
         try { await api("/api/enable", {method:"POST", body:JSON.stringify({mod:name, enabled:e.target.checked})}); mod.enabled=e.target.checked; $("modalModStatus").textContent=`${name} ${e.target.checked ? "enabled" : "disabled"}.`; await loadInstalled(); }
@@ -188,6 +245,19 @@ function openModSettings(name) {
         try { const data=await api("/api/update", {method:"POST", body:JSON.stringify({mod:name})}); $("modalModStatus").textContent=data.result.updated ? `${name}: ${data.result.from} → ${data.result.to}` : `${name} already current.`; await loadInstalled(); }
         catch(err){ $("modalModStatus").textContent=err.message; }
         finally{ busy(e.currentTarget,false); }
+    });
+    $("modalSaveSettings").addEventListener("click", async e => {
+        const changes = {};
+        document.querySelectorAll("[data-setting-value]").forEach(control => {
+            changes[control.dataset.settingValue] = control.dataset.settingType === "bool-setting" ? control.checked : control.value;
+        });
+        busy(e.currentTarget, true, "Saving...");
+        try {
+            const data = await api("/api/mod/settings", {method:"POST", body:JSON.stringify({mod:name, changes})});
+            $("modalModStatus").textContent = `Saved ${data.result.changed_count} setting(s).${data.result.restart_required ? " Restart Factorio for startup settings." : ""}`;
+            toast("Mod settings saved." + (data.result.restart_required ? " Restart Factorio." : ""));
+        } catch(err) { $("modalModStatus").textContent=err.message; }
+        finally { busy(e.currentTarget,false); }
     });
 }
 
