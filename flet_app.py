@@ -8,6 +8,7 @@ import flet as ft
 
 from manager import FactorioModManager, ManagerError, BUILTIN_MODS
 from storage import app_data_dir
+from process_restart import schedule_restart
 
 APP_DIR = Path(__file__).resolve().parent
 manager = FactorioModManager(app_data_dir() / "manager-config.json")
@@ -962,9 +963,12 @@ class FactorioFletUI:
                 result = await self.run_bg(manager.pull_app_update)
                 if result.get("changed"):
                     after = result.get("after") or {}
-                    app_update_text.value = f'Updated to {after.get("local_short", "new commit")}. Restart Factorio Mod Manager to load the new code.'
+                    app_update_text.value = f'Updated to {after.get("local_short", "new commit")}. Restarting automatically...'
                     app_update_text.color = "#8fbf75"
-                    self.notify("Update pulled successfully. Restart the app to apply it.")
+                    self.notify("Update pulled successfully. Restarting Factorio Mod Manager...")
+                    self.page.update()
+                    schedule_restart(APP_DIR, delay=0.8)
+                    return
                 else:
                     app_update_text.value = "Already up to date."
                     app_update_text.color = "#8fbf75"

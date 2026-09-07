@@ -4,6 +4,7 @@ from flask import Flask, jsonify, render_template, request
 
 from manager import FactorioModManager, ManagerError
 from storage import app_data_dir
+from process_restart import schedule_restart
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -270,7 +271,11 @@ def app_update_status():
 @app.post("/api/app-update/pull")
 def app_update_pull():
     try:
-        return ok(result=manager.pull_app_update())
+        result = manager.pull_app_update()
+        restarting = bool(result.get("changed"))
+        if restarting:
+            schedule_restart(APP_DIR, delay=1.0)
+        return ok(result=result, restarting=restarting)
     except ManagerError as exc:
         return fail(exc)
 

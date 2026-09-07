@@ -645,6 +645,22 @@ async function checkAppUpdate(showToast = true) {
     } finally { busy(button, false); }
 }
 
+async function waitForAppRestart(attempt = 0) {
+    if (attempt > 30) {
+        const statusEl = $("appUpdateStatus");
+        statusEl.textContent = "Update installed, but the restarted server did not respond yet. Refresh this page manually.";
+        return;
+    }
+    try {
+        const response = await fetch(`/api/config?restart_check=${Date.now()}`, {cache: "no-store"});
+        if (response.ok) {
+            window.location.reload();
+            return;
+        }
+    } catch (_) {}
+    setTimeout(() => waitForAppRestart(attempt + 1), 700);
+}
+
 async function pullAppUpdate() {
     const button = $("pullAppUpdateBtn");
     const statusEl = $("appUpdateStatus");
@@ -653,8 +669,9 @@ async function pullAppUpdate() {
         const data = await api("/api/app-update/pull", {method:"POST", body:"{}"});
         if (data.result.changed) {
             const after = data.result.after || {};
-            statusEl.textContent = `Updated to ${after.local_short || "new commit"}. Restart Factorio Mod Manager to load the new code.`;
-            toast("Update pulled. Restart the app to apply it.");
+            statusEl.textContent = `Updated to ${after.local_short || "new commit"}. Restarting automatically...`;
+            toast("Update pulled. Restarting Factorio Mod Manager...");
+            setTimeout(() => waitForAppRestart(), 1500);
         } else {
             statusEl.textContent = "Already up to date.";
             toast("Already up to date.");
