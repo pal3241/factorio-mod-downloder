@@ -17,7 +17,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Apply Search Mods fix
-        run: python tools/fix_search_v220b.py
+        run: python tools/fix_search_v220c.py
 
       - name: Python syntax checks
         run: python -m py_compile manager.py flet_app.py app.py storage.py launcher.py doctor.py
@@ -35,7 +35,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          rm -f tools/fix_search_v220.py tools/fix_search_v220b.py
+          rm -f tools/fix_search_v220.py tools/fix_search_v220b.py tools/fix_search_v220c.py
           rmdir tools 2>/dev/null || true
           rm -f .github/workflows/fix-search-v220.yml
           rmdir .github/workflows 2>/dev/null || true
