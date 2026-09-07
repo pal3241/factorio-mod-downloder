@@ -1,4 +1,5 @@
 name: Apply Real Mod Settings Editor 2.4.0
+# retry after settings editor test path fix
 
 on:
   push:
