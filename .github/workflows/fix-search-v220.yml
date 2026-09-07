@@ -1,0 +1,48 @@
+name: Fix tokenless Search Mods 2.2
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/fix-search-v220.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Apply Search Mods fix
+        run: python tools/fix_search_v220.py
+
+      - name: Python syntax checks
+        run: python -m py_compile manager.py flet_app.py app.py storage.py launcher.py doctor.py
+
+      - name: Core offline tests
+        run: python tests/test_core_offline.py
+
+      - name: Search offline tests
+        run: python tests/test_search_offline.py
+
+      - name: JavaScript syntax check
+        run: node --check static/app.js
+
+      - name: Commit tested fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f tools/fix_search_v220.py
+          rmdir tools 2>/dev/null || true
+          rm -f .github/workflows/fix-search-v220.yml
+          rmdir .github/workflows 2>/dev/null || true
+          rmdir .github 2>/dev/null || true
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix: make mod search tokenless and reduce contrast"
+          git push
