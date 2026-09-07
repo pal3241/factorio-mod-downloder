@@ -1,7 +1,11 @@
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import json
+import sys
 import zipfile
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 
 from factorio_settings import (
     ModSettingsDocument,
