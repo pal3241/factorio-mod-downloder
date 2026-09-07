@@ -1,0 +1,55 @@
+name: Import Factorio Mod Manager project
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "FactorioModManager-Pro-SearchTab.zip"
+
+permissions:
+  contents: write
+
+jobs:
+  import-project:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Extract project into repository root
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .project-import
+          mkdir .project-import
+          unzip -q FactorioModManager-Pro-SearchTab.zip -d .project-import
+          rm -f index.html
+          cp -a .project-import/FactorioModManager-Pro/. .
+          rm -rf .project-import FactorioModManager-Pro-SearchTab.zip
+          cat > .gitignore <<'EOF'
+          __pycache__/
+          *.py[cod]
+          .venv/
+          venv/
+          manager-config.json
+          profiles/
+          backups/
+          build/
+          dist/
+          *.log
+          EOF
+          rm -f .github/workflows/import-project.yml
+
+      - name: Commit imported source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Nothing to commit"
+            exit 0
+          fi
+          git commit -m "feat: add Factorio Mod Manager Pro 2.1.0"
+          git push
