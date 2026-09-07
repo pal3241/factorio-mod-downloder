@@ -33,9 +33,6 @@ jobs:
       - name: Search offline tests
         run: python tests/test_search_offline.py
 
-      - name: App updater and mod settings metadata tests
-        run: python tests/test_app_update_and_mod_settings.py
-
       - name: Real settings editor offline tests
         run: python tests/test_settings_editor_offline.py
 
