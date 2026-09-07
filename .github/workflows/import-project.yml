@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
     paths:
-      - "FactorioModManager-Pro-SearchTab.zip"
+      - ".upload/READY"
 
 permissions:
   contents: write
@@ -16,16 +16,18 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Extract project into repository root
+      - name: Rebuild and extract project archive
         shell: bash
         run: |
           set -euo pipefail
-          rm -rf .project-import
-          mkdir .project-import
-          unzip -q FactorioModManager-Pro-SearchTab.zip -d .project-import
+          cat .upload/part-* > /tmp/factorio-manager.b64
+          base64 -d /tmp/factorio-manager.b64 > /tmp/FactorioModManager-Pro-SearchTab.zip
+          rm -rf /tmp/factorio-import
+          mkdir /tmp/factorio-import
+          unzip -q /tmp/FactorioModManager-Pro-SearchTab.zip -d /tmp/factorio-import
           rm -f index.html
-          cp -a .project-import/FactorioModManager-Pro/. .
-          rm -rf .project-import FactorioModManager-Pro-SearchTab.zip
+          cp -a /tmp/factorio-import/FactorioModManager-Pro/. .
+          rm -rf .upload
           cat > .gitignore <<'EOF'
           __pycache__/
           *.py[cod]
