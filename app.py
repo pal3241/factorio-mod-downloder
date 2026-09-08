@@ -48,9 +48,12 @@ def save_config():
 @app.get("/api/installed")
 def installed():
     try:
+        state = manager.dashboard_state()
         return ok(
-            mods=manager.list_installed(),
-            issues=manager.dependency_issues(),
+            mods=state["mods"],
+            issues=state["issues"],
+            duplicates=state["duplicates"],
+            invalid_files=state["invalid_files"],
         )
     except ManagerError as exc:
         return fail(exc)

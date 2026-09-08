@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import os
 import platform
@@ -15,6 +16,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
 import hashlib
+import threading
+import time
 import uuid
 import webbrowser
 
@@ -230,6 +233,11 @@ class FactorioModManager:
         self.session.headers.update({
             "User-Agent": "Factorio-Local-Mod-Manager/1.0"
         })
+        self._cache_lock = threading.RLock()
+        self._installed_cache_signature = None
+        self._installed_cache_items: list[dict[str, Any]] = []
+        self._portal_mod_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+        self._portal_cache_ttl = 120.0
 
         self.config = self._load_config()
         self.mods_dir.mkdir(parents=True, exist_ok=True)
@@ -388,8 +396,64 @@ class FactorioModManager:
         # Factorio has three settings-stage files, not only settings.lua.
         return bool(read_settings_stage_sources(path, kind))
 
+    def _installed_signature(self) -> tuple[Any, ...]:
+        """Cheap filesystem fingerprint used to avoid reopening every mod ZIP."""
+        self.mods_dir.mkdir(parents=True, exist_ok=True)
+        signature: list[Any] = []
+        try:
+            mod_list_stat = self.mod_list_path.stat()
+            signature.append(("mod-list", mod_list_stat.st_mtime_ns, mod_list_stat.st_size))
+        except OSError:
+            signature.append(("mod-list", 0, 0))
+
+        for path in sorted(self.mods_dir.iterdir(), key=lambda p: p.name.lower()):
+            if path.name.startswith(".") or path.name in {"mod-list.json", "mod-list.json.bak"}:
+                continue
+            try:
+                if path.is_file() and path.suffix.lower() == ".zip":
+                    stat = path.stat()
+                    signature.append(("zip", path.name, stat.st_mtime_ns, stat.st_size))
+                elif path.is_dir():
+                    info_path = path / "info.json"
+                    try:
+                        stat = info_path.stat()
+                        info_sig = (stat.st_mtime_ns, stat.st_size)
+                    except OSError:
+                        info_sig = (0, 0)
+                    stage_presence = tuple(name for name in SETTINGS_STAGE_FILES if (path / name).exists())
+                    signature.append(("dir", path.name, info_sig, stage_presence))
+            except OSError:
+                continue
+        return tuple(signature)
+
+    def _read_mod_zip_manifest(self, path: Path) -> tuple[dict[str, Any] | None, bool]:
+        """Read info.json and settings-stage presence with one ZIP open."""
+        try:
+            with zipfile.ZipFile(path, "r") as archive:
+                names = archive.namelist()
+                candidates = [name for name in names if name.endswith("/info.json") or name == "info.json"]
+                if not candidates:
+                    return None, False
+                candidates.sort(key=lambda x: (x.count("/"), len(x)))
+                raw = archive.read(candidates[0]).decode("utf-8-sig")
+                info = json.loads(raw)
+                if not isinstance(info, dict):
+                    return None, False
+                has_settings = any(
+                    member.rsplit("/", 1)[-1] in SETTINGS_STAGE_FILES
+                    for member in names
+                )
+                return info, has_settings
+        except (OSError, zipfile.BadZipFile, KeyError, UnicodeDecodeError, json.JSONDecodeError):
+            return None, False
+
     def list_installed(self) -> list[dict[str, Any]]:
         self.mods_dir.mkdir(parents=True, exist_ok=True)
+        signature = self._installed_signature()
+        with self._cache_lock:
+            if signature == self._installed_cache_signature:
+                return copy.deepcopy(self._installed_cache_items)
+
         enabled = self._enabled_map()
         items: list[dict[str, Any]] = []
 
@@ -399,13 +463,15 @@ class FactorioModManager:
 
             info = None
             kind = None
+            has_settings = False
 
             if path.is_file() and path.suffix.lower() == ".zip":
-                info = self._read_info_from_zip(path)
+                info, has_settings = self._read_mod_zip_manifest(path)
                 kind = "zip"
             elif path.is_dir():
                 info = self._read_info_from_dir(path)
                 kind = "folder"
+                has_settings = any((path / name).exists() for name in SETTINGS_STAGE_FILES)
 
             if not info or not isinstance(info.get("name"), str):
                 continue
@@ -428,12 +494,15 @@ class FactorioModManager:
                 "file": path.name,
                 "path": str(path),
                 "kind": kind,
-                "has_settings": self._mod_has_settings(path, kind),
+                "has_settings": has_settings,
                 "dependencies": dependencies,
             })
 
         items.sort(key=lambda x: (x["title"].lower(), version_obj(x["version"] or "0")), reverse=False)
-        return items
+        with self._cache_lock:
+            self._installed_cache_signature = signature
+            self._installed_cache_items = copy.deepcopy(items)
+        return copy.deepcopy(items)
 
     def installed_index(self) -> dict[str, dict[str, Any]]:
         result: dict[str, dict[str, Any]] = {}
@@ -445,6 +514,12 @@ class FactorioModManager:
 
     def portal_mod(self, name: str) -> dict[str, Any]:
         name = parse_mod_name(name)
+        now = time.monotonic()
+        with self._cache_lock:
+            cached = self._portal_mod_cache.get(name)
+            if cached and now - cached[0] <= self._portal_cache_ttl:
+                return copy.deepcopy(cached[1])
+
         response = self.session.get(f"{API_BASE}/{name}/full", timeout=20)
 
         if response.status_code == 404:
@@ -458,7 +533,13 @@ class FactorioModManager:
         data = response.json()
         if not isinstance(data, dict):
             raise ManagerError("Respons Mod Portal tidak valid.")
-        return data
+
+        with self._cache_lock:
+            self._portal_mod_cache[name] = (now, copy.deepcopy(data))
+            if len(self._portal_mod_cache) > 256:
+                oldest = min(self._portal_mod_cache.items(), key=lambda item: item[1][0])[0]
+                self._portal_mod_cache.pop(oldest, None)
+        return copy.deepcopy(data)
 
 
     def portal_search_meta(self) -> dict[str, Any]:
@@ -1273,11 +1354,72 @@ class FactorioModManager:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
-    def diagnostics(self) -> dict[str, Any]:
+    def dashboard_state(self) -> dict[str, Any]:
+        """Build Installed-tab state from a single mod scan."""
         installed = self.list_installed()
-        issues = self.dependency_issues()
-        duplicates = self.duplicate_mods()
-        invalid = self.invalid_mod_files()
+        index: dict[str, dict[str, Any]] = {}
+        groups: dict[str, list[dict[str, Any]]] = {}
+        for item in installed:
+            groups.setdefault(item["name"], []).append(item)
+            current = index.get(item["name"])
+            if current is None or version_obj(item["version"] or "0") > version_obj(current["version"] or "0"):
+                index[item["name"]] = item
+
+        missing: list[dict[str, Any]] = []
+        wrong_version: list[dict[str, Any]] = []
+        incompatible: list[dict[str, Any]] = []
+        for name, item in index.items():
+            if not item.get("enabled"):
+                continue
+            for raw_dep in item.get("dependencies", []):
+                dep = Dependency(**raw_dep)
+                if dep.name in BUILTIN_MODS:
+                    continue
+                target = index.get(dep.name)
+                if dep.kind == "required":
+                    if not target or not target.get("enabled"):
+                        missing.append({"mod": name, "dependency": dep.name, "requirement": dep.raw})
+                    elif not satisfies(target["version"], dep.operator, dep.version):
+                        wrong_version.append({
+                            "mod": name,
+                            "dependency": dep.name,
+                            "installed": target["version"],
+                            "requirement": dep.raw,
+                        })
+                elif dep.kind == "incompatible" and target and target.get("enabled"):
+                    incompatible.append({"mod": name, "dependency": dep.name, "requirement": dep.raw})
+
+        duplicates = []
+        for name, items in groups.items():
+            if len(items) > 1:
+                ordered = sorted(items, key=lambda x: version_obj(x["version"] or "0"), reverse=True)
+                duplicates.append({"name": name, "keep": ordered[0], "extras": ordered[1:]})
+
+        valid_paths = {str(Path(item["path"]).resolve()) for item in installed}
+        invalid_files = []
+        for path in sorted(self.mods_dir.iterdir(), key=lambda p: p.name.lower()):
+            if path.name.startswith(".") or path.name in {"mod-list.json", "mod-list.json.bak", "mod-settings.dat"}:
+                continue
+            if path.is_file() and path.suffix.lower() == ".zip" and str(path.resolve()) not in valid_paths:
+                invalid_files.append({"file": path.name, "reason": "ZIP rusak atau info.json tidak valid"})
+            elif path.is_dir() and (path / "info.json").exists() and str(path.resolve()) not in valid_paths:
+                invalid_files.append({"file": path.name, "reason": "info.json tidak valid"})
+
+        return {
+            "mods": installed,
+            "issues": {
+                "missing": missing,
+                "wrong_version": wrong_version,
+                "incompatible": incompatible,
+            },
+            "duplicates": duplicates,
+            "invalid_files": invalid_files,
+        }
+
+    def diagnostics(self) -> dict[str, Any]:
+        state = self.dashboard_state()
+        installed = state["mods"]
+        issues = state["issues"]
         return {
             "mods_dir": str(self.mods_dir),
             "mods_dir_exists": self.mods_dir.exists(),
@@ -1285,8 +1427,8 @@ class FactorioModManager:
             "installed_count": len(installed),
             "enabled_count": sum(1 for x in installed if x["enabled"]),
             "dependency_issue_count": sum(len(v) for v in issues.values()),
-            "duplicates": duplicates,
-            "invalid_files": invalid,
+            "duplicates": state["duplicates"],
+            "invalid_files": state["invalid_files"],
         }
 
     def invalid_mod_files(self) -> list[dict[str, str]]:

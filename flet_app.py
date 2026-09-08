@@ -25,16 +25,17 @@ class FactorioFletUI:
 
         page.title = "Factorio Mod Manager"
         page.theme_mode = ft.ThemeMode.DARK
+        page.theme = ft.Theme(color_scheme_seed="#4EA1FF")
         page.padding = 0
-        page.bgcolor = "#0e0d0c"
+        page.bgcolor = "#070B14"
         if not page.web:
-            page.window.width = 1180
-            page.window.height = 760
+            page.window.width = 1240
+            page.window.height = 800
             page.window.min_width = 840
             page.window.min_height = 580
 
         self.title = ft.Text("Installed Mods", size=28, weight=ft.FontWeight.BOLD)
-        self.status = ft.Text("Ready", size=12, color="#a69d93")
+        self.status = ft.Text("Ready", size=12, color="#8FA6BF")
         self.body = ft.Column(expand=True, scroll=ft.ScrollMode.AUTO, spacing=12)
 
         self.nav = ft.NavigationRail(
@@ -42,7 +43,7 @@ class FactorioFletUI:
             label_type=ft.NavigationRailLabelType.ALL,
             min_width=92,
             group_alignment=-0.9,
-            bgcolor="#151310",
+            bgcolor="#09111E",
             destinations=[
                 ft.NavigationRailDestination(icon=ft.Icons.INVENTORY_2_OUTLINED, selected_icon=ft.Icons.INVENTORY_2, label="Installed"),
                 ft.NavigationRailDestination(icon=ft.Icons.SEARCH, selected_icon=ft.Icons.TRAVEL_EXPLORE, label="Search"),
@@ -58,7 +59,7 @@ class FactorioFletUI:
             spacing=0,
             controls=[
                 self.nav,
-                ft.VerticalDivider(width=1, color="#39332b"),
+                ft.VerticalDivider(width=1, color="#1C314A"),
                 ft.Container(
                     expand=True,
                     padding=24,
@@ -68,16 +69,16 @@ class FactorioFletUI:
                             ft.Row(
                                 alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                                 controls=[
-                                    ft.Column(spacing=2, controls=[ft.Text("LOCAL MOD CONTROL", size=10, color="#e48c30"), self.title]),
+                                    ft.Column(spacing=2, controls=[ft.Text("LOCAL MOD CONTROL", size=10, color="#4EA1FF"), self.title]),
                                     ft.Row(controls=[
                                         ft.IconButton(icon=ft.Icons.REFRESH, tooltip="Refresh", on_click=self.refresh_current),
                                         ft.Button("Launch Factorio", icon=ft.Icons.PLAY_ARROW, on_click=self.launch_factorio),
                                     ]),
                                 ],
                             ),
-                            ft.Divider(color="#39332b"),
+                            ft.Divider(color="#1C314A"),
                             ft.Container(expand=True, content=self.body),
-                            ft.Divider(color="#39332b"),
+                            ft.Divider(color="#1C314A"),
                             self.status,
                         ],
                     ),
@@ -135,19 +136,20 @@ class FactorioFletUI:
         return ft.Container(
             expand=True,
             padding=16,
-            border=ft.Border.all(1, "#39332b"),
+            border=ft.Border.all(1, "#1C314A"),
             border_radius=10,
-            bgcolor="#191714",
+            bgcolor="#0D1726",
             content=ft.Row(controls=[
-                ft.Icon(icon, color="#e48c30"),
-                ft.Column(spacing=1, controls=[ft.Text(label, size=11, color="#a69d93"), ft.Text(str(value), size=24, weight=ft.FontWeight.BOLD)]),
+                ft.Icon(icon, color="#4EA1FF"),
+                ft.Column(spacing=1, controls=[ft.Text(label, size=11, color="#8FA6BF"), ft.Text(str(value), size=24, weight=ft.FontWeight.BOLD)]),
             ]),
         )
 
     async def render_installed(self):
-        self.installed = await self.run_bg(manager.list_installed)
-        self.issues = await self.run_bg(manager.dependency_issues)
-        diag = await self.run_bg(manager.diagnostics)
+        dashboard = await self.run_bg(manager.dashboard_state)
+        self.installed = dashboard["mods"]
+        self.issues = dashboard["issues"]
+        diag = {"duplicates": dashboard["duplicates"], "invalid_files": dashboard["invalid_files"]}
         issue_count = sum(len(v) for v in self.issues.values())
         self.body.controls.append(ft.Row(controls=[
             self.stat_card("Installed", len(self.installed), ft.Icons.INVENTORY_2),
@@ -169,18 +171,18 @@ class FactorioFletUI:
                 list_col.controls.append(
                     ft.Container(
                         padding=12,
-                        border=ft.Border.all(1, "#39332b"),
+                        border=ft.Border.all(1, "#1C314A"),
                         border_radius=9,
-                        bgcolor="#191714",
+                        bgcolor="#0D1726",
                         content=ft.Row(
                             alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                             controls=[
                                 ft.Row(expand=True, controls=[
-                                    ft.CircleAvatar(content=ft.Text((mod["title"] or mod["name"])[:2].upper()), bgcolor="#2a241d", color="#e48c30"),
+                                    ft.CircleAvatar(content=ft.Text((mod["title"] or mod["name"])[:2].upper()), bgcolor="#10243A", color="#4EA1FF"),
                                     ft.Column(expand=True, spacing=2, controls=[
                                         ft.Text(mod["title"], weight=ft.FontWeight.BOLD),
-                                        ft.Text(f'{mod["name"]} · {mod["version"]} · Factorio {mod["factorio_version"] or "?"}', size=11, color="#a69d93"),
-                                        ft.Text(mod["file"], size=10, color="#70685f"),
+                                        ft.Text(f'{mod["name"]} · {mod["version"]} · Factorio {mod["factorio_version"] or "?"}', size=11, color="#8FA6BF"),
+                                        ft.Text(mod["file"], size=10, color="#5F748C"),
                                     ]),
                                 ]),
                                 ft.Row(controls=[
@@ -237,7 +239,7 @@ class FactorioFletUI:
             self.set_status("Ready")
             return
 
-        status = ft.Text("", size=11, color="#a69d93")
+        status = ft.Text("", size=11, color="#8FA6BF")
         enabled = ft.Switch(label="Enabled", value=bool(mod.get("enabled")))
         editors = {}
         dialog = None
@@ -281,13 +283,13 @@ class FactorioFletUI:
                 details += f' · default: {value_text(default)}'
             return ft.Container(
                 padding=10,
-                bgcolor="#1d1b18",
-                border=ft.Border.all(1, "#39332b"),
+                bgcolor="#0C1624",
+                border=ft.Border.all(1, "#1C314A"),
                 border_radius=8,
                 content=ft.Column(spacing=5, controls=[
                     control,
-                    *([ft.Text(helper_line, size=9, color="#77716b")] if setting.get("type") != "bool-setting" else []),
-                    ft.Text(details, size=9, color="#77716b"),
+                    *([ft.Text(helper_line, size=9, color="#6F849B")] if setting.get("type") != "bool-setting" else []),
+                    ft.Text(details, size=9, color="#6F849B"),
                 ]),
             )
 
@@ -303,8 +305,8 @@ class FactorioFletUI:
                 continue
             title, note = section_labels[section]
             settings_controls.extend([
-                ft.Text(title, size=16, weight=ft.FontWeight.BOLD, color="#f2d29f"),
-                ft.Text(note, size=9, color="#77716b"),
+                ft.Text(title, size=16, weight=ft.FontWeight.BOLD, color="#B9D8FF"),
+                ft.Text(note, size=9, color="#6F849B"),
                 *[setting_control(item) for item in items],
                 ft.Container(height=3),
             ])
@@ -344,7 +346,7 @@ class FactorioFletUI:
         async def save_values(ev):
             ev.control.disabled = True
             status.value = "Saving mod-settings.dat..."
-            status.color = "#a69d93"
+            status.color = "#8FA6BF"
             self.page.update()
             changes = {}
             for setting_name, entry in editors.items():
@@ -424,7 +426,7 @@ class FactorioFletUI:
             if raw:
                 deps.append(ft.Text(f"• {raw}", size=10, color="#b9aea1"))
         if not deps:
-            deps.append(ft.Text("No declared dependencies.", size=10, color="#77716b"))
+            deps.append(ft.Text("No declared dependencies.", size=10, color="#6F849B"))
 
         save_button = ft.Button(
             "Save Changes",
@@ -435,7 +437,7 @@ class FactorioFletUI:
         dialog = ft.AlertDialog(
             modal=True,
             title=ft.Row(controls=[
-                ft.Icon(ft.Icons.SETTINGS_OUTLINED, color="#e48c30"),
+                ft.Icon(ft.Icons.SETTINGS_OUTLINED, color="#4EA1FF"),
                 ft.Text(f'Mod Settings — {mod.get("title") or name}', weight=ft.FontWeight.BOLD),
             ]),
             content=ft.Container(
@@ -446,24 +448,24 @@ class FactorioFletUI:
                     spacing=9,
                     controls=[
                         ft.Row(controls=[enabled, ft.Container(expand=True), ft.Text(f'v{mod.get("version") or "?"}', color="#f2b25c")]),
-                        ft.Text(f'ID: {name} · Factorio {mod.get("factorio_version") or "?"}', size=10, color="#a69d93"),
-                        ft.Text(f'Settings stage: {files}', size=9, color="#77716b"),
-                        ft.Text(dat_line, size=9, color="#e4b65f" if setting_state.get("factorio_running") else "#77716b"),
-                        ft.Divider(color="#39332b"),
+                        ft.Text(f'ID: {name} · Factorio {mod.get("factorio_version") or "?"}', size=10, color="#8FA6BF"),
+                        ft.Text(f'Settings stage: {files}', size=9, color="#6F849B"),
+                        ft.Text(dat_line, size=9, color="#e4b65f" if setting_state.get("factorio_running") else "#6F849B"),
+                        ft.Divider(color="#1C314A"),
                         ft.Text("Factorio Mod Settings", weight=ft.FontWeight.BOLD),
                         *settings_controls,
-                        ft.Divider(color="#39332b"),
+                        ft.Divider(color="#1C314A"),
                         ft.Text("Dependencies", weight=ft.FontWeight.BOLD),
                         *deps,
-                        ft.Divider(color="#39332b"),
+                        ft.Divider(color="#1C314A"),
                         status,
                     ],
                 ),
             ),
             actions=[
-                ft.Button("Open folder", icon=ft.Icons.FOLDER_OPEN, on_click=open_location, bgcolor="#24211e", color="#d8d0c7"),
-                ft.Button("Mod Portal", icon=ft.Icons.OPEN_IN_NEW, on_click=open_portal, bgcolor="#24211e", color="#d8d0c7"),
-                ft.Button("Check / Update", icon=ft.Icons.SYSTEM_UPDATE_ALT, on_click=update_mod, bgcolor="#24211e", color="#d8d0c7"),
+                ft.Button("Open folder", icon=ft.Icons.FOLDER_OPEN, on_click=open_location, bgcolor="#0F1C2D", color="#D7E7F8"),
+                ft.Button("Mod Portal", icon=ft.Icons.OPEN_IN_NEW, on_click=open_portal, bgcolor="#0F1C2D", color="#D7E7F8"),
+                ft.Button("Check / Update", icon=ft.Icons.SYSTEM_UPDATE_ALT, on_click=update_mod, bgcolor="#0F1C2D", color="#D7E7F8"),
                 save_button,
                 ft.TextButton("Close", on_click=close_dialog),
             ],
@@ -541,11 +543,11 @@ class FactorioFletUI:
             hint_text="Search mods by title, ID, summary, or author...",
             prefix_icon=ft.Icons.SEARCH,
             expand=True,
-            bgcolor="#171512",
-            color="#eee7df",
-            border_color="#49423a",
-            focused_border_color="#a56d32",
-            hint_style=ft.TextStyle(color="#77716b"),
+            bgcolor="#0A1422",
+            color="#EAF2FB",
+            border_color="#233B55",
+            focused_border_color="#4EA1FF",
+            hint_style=ft.TextStyle(color="#6F849B"),
         )
         result_count = ft.Text("Loading...", size=15, weight=ft.FontWeight.BOLD)
         results_col = ft.Column(spacing=10)
@@ -567,8 +569,8 @@ class FactorioFletUI:
                 tab_row.controls.append(ft.Button(
                     mode["label"],
                     on_click=choose,
-                    bgcolor="#875a2e" if active else "#302d29",
-                    color="#f5e5d3" if active else "#d8d0c7",
+                    bgcolor="#173A5E" if active else "#101B2A",
+                    color="#E7F2FF" if active else "#D7E7F8",
                 ))
 
         def state_sets(group):
@@ -579,16 +581,16 @@ class FactorioFletUI:
             return search_state["expansions"], search_state["exclude_expansions"]
 
         def add_filter_group(title, group, items):
-            filters_col.controls.append(ft.Text(title, size=17, weight=ft.FontWeight.BOLD, color="#f2d29f"))
+            filters_col.controls.append(ft.Text(title, size=17, weight=ft.FontWeight.BOLD, color="#B9D8FF"))
             for item in items:
                 inc_state, exc_state = state_sets(group)
                 include = ft.Checkbox(label=item["label"], value=item["id"] in inc_state, expand=True)
-                exclude = ft.IconButton(icon=ft.Icons.BLOCK, tooltip=f'Exclude {item["label"]}', icon_color="#d28b2f" if item["id"] in exc_state else "#77716b")
+                exclude = ft.IconButton(icon=ft.Icons.BLOCK, tooltip=f'Exclude {item["label"]}', icon_color="#d28b2f" if item["id"] in exc_state else "#6F849B")
 
                 async def include_changed(e, item_id=item["id"], g=group, checkbox=include, ban=exclude):
                     inc, exc = state_sets(g)
                     if checkbox.value:
-                        inc.add(item_id); exc.discard(item_id); ban.icon_color = "#77716b"
+                        inc.add(item_id); exc.discard(item_id); ban.icon_color = "#6F849B"
                     else:
                         inc.discard(item_id)
                     search_state["page"] = 1
@@ -599,7 +601,7 @@ class FactorioFletUI:
                     inc, exc = state_sets(g)
                     inc.discard(item_id); checkbox.value = False
                     if item_id in exc:
-                        exc.remove(item_id); ban.icon_color = "#77716b"
+                        exc.remove(item_id); ban.icon_color = "#6F849B"
                     else:
                         exc.add(item_id); ban.icon_color = "#d28b2f"
                     search_state["page"] = 1
@@ -620,7 +622,7 @@ class FactorioFletUI:
             search_state["page"] = 1
             await run_search(False)
         deprecated.on_change = deprecated_changed
-        filters_col.controls.extend([ft.Text("Options", size=17, weight=ft.FontWeight.BOLD, color="#f2d29f"), deprecated])
+        filters_col.controls.extend([ft.Text("Options", size=17, weight=ft.FontWeight.BOLD, color="#B9D8FF"), deprecated])
 
         async def exact_lookup(e=None):
             value = query.value.strip()
@@ -661,12 +663,12 @@ class FactorioFletUI:
                 if mod.get("thumbnail"):
                     icon = ft.Image(src=mod["thumbnail"], width=82, height=82, fit=ft.BoxFit.COVER)
                 else:
-                    icon = ft.Container(width=82, height=82, alignment=ft.Alignment.CENTER, bgcolor="#3a3733", content=ft.Text((mod["title"] or mod["name"])[:2].upper(), size=24, weight=ft.FontWeight.BOLD, color="#f2b25c"))
+                    icon = ft.Container(width=82, height=82, alignment=ft.Alignment.CENTER, bgcolor="#13263C", content=ft.Text((mod["title"] or mod["name"])[:2].upper(), size=24, weight=ft.FontWeight.BOLD, color="#f2b25c"))
 
                 detail_box.controls[:] = [ft.Container(
                     padding=14,
-                    bgcolor="#191714",
-                    border=ft.Border.all(1, "#493f34"),
+                    bgcolor="#0D1726",
+                    border=ft.Border.all(1, "#24415F"),
                     border_radius=9,
                     content=ft.Column(spacing=10, controls=[
                         ft.Row(vertical_alignment=ft.CrossAxisAlignment.START, controls=[
@@ -674,7 +676,7 @@ class FactorioFletUI:
                             ft.Column(expand=True, spacing=4, controls=[
                                 ft.Text(mod["title"], size=20, weight=ft.FontWeight.BOLD, color="#f3d6a5"),
                                 ft.Text(f'by {mod["owner"]} · {mod["downloads_count"]:,} downloads', size=11, color="#e99828"),
-                                ft.Text(mod["summary"], size=12, color="#d8d0c7"),
+                                ft.Text(mod["summary"], size=12, color="#D7E7F8"),
                             ]),
                         ]),
                         ft.Row(controls=[versions, ft.Button("Install", icon=ft.Icons.DOWNLOAD, bgcolor="#49b65b", color="#07160a", on_click=install_selected)]),
@@ -750,17 +752,17 @@ class FactorioFletUI:
                     tags = ft.Row(spacing=4, wrap=True, controls=[
                         ft.Container(
                             padding=ft.Padding.symmetric(horizontal=8, vertical=5),
-                            bgcolor="#373431", border=ft.Border.all(1, "#4a4641"), border_radius=3,
-                            content=ft.Text(next((x["label"] for x in meta["tags"] if x["id"] == tag), tag), size=10, color="#c9c2ba"),
+                            bgcolor="#132238", border=ft.Border.all(1, "#29445F"), border_radius=3,
+                            content=ft.Text(next((x["label"] for x in meta["tags"] if x["id"] == tag), tag), size=10, color="#BDD0E2"),
                         ) for tag in (mod.get("tags") or [])
                     ])
                     if not tags.controls:
-                        tags.controls.append(ft.Text("No tags", size=10, color="#77716b"))
+                        tags.controls.append(ft.Text("No tags", size=10, color="#6F849B"))
 
                     if mod.get("thumbnail"):
                         thumb = ft.Image(src=mod["thumbnail"], width=125, height=125, fit=ft.BoxFit.COVER)
                     else:
-                        thumb = ft.Container(width=125, height=125, alignment=ft.Alignment.CENTER, bgcolor="#3a3733", content=ft.Text((mod["title"] or mod["name"])[:2].upper(), size=30, weight=ft.FontWeight.BOLD, color="#f2b25c"))
+                        thumb = ft.Container(width=125, height=125, alignment=ft.Alignment.CENTER, bgcolor="#13263C", content=ft.Text((mod["title"] or mod["name"])[:2].upper(), size=30, weight=ft.FontWeight.BOLD, color="#f2b25c"))
 
                     local = mod.get("installed")
                     if local and not mod.get("update_available"):
@@ -776,7 +778,7 @@ class FactorioFletUI:
                             ft.Column(expand=True, spacing=5, controls=[
                                 ft.TextButton(mod["title"], on_click=open_details, style=ft.ButtonStyle(color="#f3d6a5")),
                                 ft.Text(f'by {mod["owner"]}', size=11, color="#e99828"),
-                                ft.Text(mod["summary"], size=12, color="#eee8df", max_lines=3),
+                                ft.Text(mod["summary"], size=12, color="#EAF2FB", max_lines=3),
                                 tags,
                             ]),
                             ft.Column(width=150, spacing=5, controls=[
@@ -790,8 +792,8 @@ class FactorioFletUI:
                     )
                     results_col.controls.append(ft.Container(
                         padding=12,
-                        bgcolor="#2d2b29",
-                        border=ft.Border.all(1, "#49443e"),
+                        bgcolor="#0F1B2B",
+                        border=ft.Border.all(1, "#223A54"),
                         border_radius=6,
                         content=result_body,
                     ))
@@ -806,8 +808,8 @@ class FactorioFletUI:
                         await run_search(False)
                     pagination.controls.append(ft.Button(
                         str(page_no), on_click=go_page,
-                        bgcolor="#875a2e" if page_no == current_page else "#302d29",
-                        color="#f5e5d3" if page_no == current_page else "#d8d0c7",
+                        bgcolor="#173A5E" if page_no == current_page else "#101B2A",
+                        color="#E7F2FF" if page_no == current_page else "#D7E7F8",
                     ))
             except Exception as exc:
                 result_count.value = "Search failed"
@@ -815,12 +817,12 @@ class FactorioFletUI:
             self.page.update()
 
         set_tab_styles()
-        search_bar = ft.Row(controls=[query, ft.Button("Exact Lookup", on_click=exact_lookup, bgcolor="#24211e", color="#d8d0c7"), ft.Button("Search", icon=ft.Icons.SEARCH, on_click=submit_search, bgcolor="#2b2824", color="#e6ded5")])
+        search_bar = ft.Row(controls=[query, ft.Button("Exact Lookup", on_click=exact_lookup, bgcolor="#0F1C2D", color="#D7E7F8"), ft.Button("Search", icon=ft.Icons.SEARCH, on_click=submit_search, bgcolor="#102033", color="#DCE9F6")])
         filter_panel = ft.Container(
             width=235,
             padding=14,
-            bgcolor="#211f1c",
-            border=ft.Border.all(1, "#403a33"),
+            bgcolor="#0D1828",
+            border=ft.Border.all(1, "#203852"),
             border_radius=7,
             content=filters_col,
         )
@@ -850,9 +852,9 @@ class FactorioFletUI:
                 e.control.data = name
                 await self.update_one(e)
             self.body.controls.append(ft.Container(
-                padding=12, border=ft.Border.all(1, "#39332b"), border_radius=9, bgcolor="#191714",
+                padding=12, border=ft.Border.all(1, "#1C314A"), border_radius=9, bgcolor="#0D1726",
                 content=ft.Row(alignment=ft.MainAxisAlignment.SPACE_BETWEEN, controls=[
-                    ft.Column(spacing=2, controls=[ft.Text(item["title"] or item["name"], weight=ft.FontWeight.BOLD), ft.Text(f'{item["installed"]} → {item["latest"] or "?"}', size=11, color="#a69d93")]),
+                    ft.Column(spacing=2, controls=[ft.Text(item["title"] or item["name"], weight=ft.FontWeight.BOLD), ft.Text(f'{item["installed"]} → {item["latest"] or "?"}', size=11, color="#8FA6BF")]),
                     ft.Button("Update", on_click=do_update) if item.get("update_available") else ft.Text("Current" if not item.get("error") else "Unavailable", color="#8fbf75" if not item.get("error") else "#ff8c86"),
                 ]),
             ))
@@ -881,7 +883,7 @@ class FactorioFletUI:
                 await self.render_current()
             except Exception as exc: self.notify(str(exc), True)
         self.body.controls.append(ft.Row(controls=[name, ft.Button("Save current", icon=ft.Icons.SAVE, on_click=save)]))
-        self.body.controls.append(ft.Text("Profiles snapshot installed versions + enabled state.", size=11, color="#a69d93"))
+        self.body.controls.append(ft.Text("Profiles snapshot installed versions + enabled state.", size=11, color="#8FA6BF"))
         for profile in profiles:
             async def apply(e, n=profile["name"]):
                 self.set_status(f"Applying profile {n}...")
@@ -895,9 +897,9 @@ class FactorioFletUI:
                     await self.run_bg(manager.delete_profile, n); self.notify(f'Deleted {n}.'); await self.render_current()
                 except Exception as exc: self.notify(str(exc), True)
             self.body.controls.append(ft.Container(
-                padding=12, border=ft.Border.all(1, "#39332b"), border_radius=9, bgcolor="#191714",
+                padding=12, border=ft.Border.all(1, "#1C314A"), border_radius=9, bgcolor="#0D1726",
                 content=ft.Row(alignment=ft.MainAxisAlignment.SPACE_BETWEEN, controls=[
-                    ft.Column(spacing=2, controls=[ft.Text(profile["name"], weight=ft.FontWeight.BOLD), ft.Text(f'{profile["mod_count"]} mods · Factorio {profile["factorio_version"]}', size=11, color="#a69d93")]),
+                    ft.Column(spacing=2, controls=[ft.Text(profile["name"], weight=ft.FontWeight.BOLD), ft.Text(f'{profile["mod_count"]} mods · Factorio {profile["factorio_version"]}', size=11, color="#8FA6BF")]),
                     ft.Row(controls=[ft.Button("Apply", on_click=apply), ft.IconButton(icon=ft.Icons.DELETE_OUTLINE, on_click=delete)]),
                 ]),
             ))
@@ -922,13 +924,13 @@ class FactorioFletUI:
                 r = await self.run_bg(manager.backup_state, "flet"); self.notify(f'Backup: {r["path"]}')
             except Exception as exc: self.notify(str(exc), True)
 
-        app_update_text = ft.Text("Not checked yet.", size=11, color="#a69d93")
-        pull_update_btn = ft.Button("Pull Update", icon=ft.Icons.DOWNLOAD, disabled=True, bgcolor="#2b2824", color="#e6ded5")
+        app_update_text = ft.Text("Not checked yet.", size=11, color="#8FA6BF")
+        pull_update_btn = ft.Button("Pull Update", icon=ft.Icons.DOWNLOAD, disabled=True, bgcolor="#102033", color="#DCE9F6")
 
         async def check_app_update(e):
             e.control.disabled = True
             app_update_text.value = "Checking origin/main..."
-            app_update_text.color = "#a69d93"
+            app_update_text.color = "#8FA6BF"
             self.page.update()
             try:
                 result = await self.run_bg(manager.app_update_status, True)
@@ -957,7 +959,7 @@ class FactorioFletUI:
         async def pull_app_update(e):
             e.control.disabled = True
             app_update_text.value = "Pulling update..."
-            app_update_text.color = "#a69d93"
+            app_update_text.color = "#8FA6BF"
             self.page.update()
             try:
                 result = await self.run_bg(manager.pull_app_update)
@@ -979,25 +981,25 @@ class FactorioFletUI:
                 e.control.disabled = True
                 self.page.update()
 
-        check_update_btn = ft.Button("Check App Update", icon=ft.Icons.REFRESH, on_click=check_app_update, bgcolor="#24211e", color="#d8d0c7")
+        check_update_btn = ft.Button("Check App Update", icon=ft.Icons.REFRESH, on_click=check_app_update, bgcolor="#0F1C2D", color="#D7E7F8")
         pull_update_btn.on_click = pull_app_update
 
         diag = await self.run_bg(manager.diagnostics)
         self.body.controls.extend([
-            ft.Container(padding=16, border=ft.Border.all(1, "#39332b"), border_radius=10, bgcolor="#191714", content=ft.Column(controls=[
+            ft.Container(padding=16, border=ft.Border.all(1, "#1C314A"), border_radius=10, bgcolor="#0D1726", content=ft.Column(controls=[
                 mods_dir, factorio_version, exe, args, deps,
                 ft.Row(wrap=True, controls=[ft.Button("Save Settings", icon=ft.Icons.SAVE, on_click=save), ft.Button("Backup state", icon=ft.Icons.BACKUP, on_click=backup)]),
-                ft.Divider(color="#39332b"),
+                ft.Divider(color="#1C314A"),
                 ft.Text("Application Update", weight=ft.FontWeight.BOLD),
-                ft.Text("Checks this Git clone against origin/main and only pulls fast-forward updates.", size=11, color="#77716b"),
+                ft.Text("Checks this Git clone against origin/main and only pulls fast-forward updates.", size=11, color="#6F849B"),
                 ft.Row(wrap=True, controls=[check_update_btn, pull_update_btn]),
                 app_update_text,
             ])),
-            ft.Container(padding=14, border=ft.Border.all(1, "#39332b"), border_radius=10, content=ft.Column(controls=[
+            ft.Container(padding=14, border=ft.Border.all(1, "#1C314A"), border_radius=10, content=ft.Column(controls=[
                 ft.Text("Diagnostics", weight=ft.FontWeight.BOLD),
-                ft.Text(f'Mods dir: {diag["mods_dir"]}', size=11, color="#a69d93"),
-                ft.Text(f'Installed: {diag["installed_count"]} · Enabled: {diag["enabled_count"]} · Dependency issues: {diag["dependency_issue_count"]}', size=11, color="#a69d93"),
-                ft.Text(f'Duplicates: {len(diag["duplicates"])} · Invalid files: {len(diag["invalid_files"])}', size=11, color="#a69d93"),
+                ft.Text(f'Mods dir: {diag["mods_dir"]}', size=11, color="#8FA6BF"),
+                ft.Text(f'Installed: {diag["installed_count"]} · Enabled: {diag["enabled_count"]} · Dependency issues: {diag["dependency_issue_count"]}', size=11, color="#8FA6BF"),
+                ft.Text(f'Duplicates: {len(diag["duplicates"])} · Invalid files: {len(diag["invalid_files"])}', size=11, color="#8FA6BF"),
             ])),
         ])
 
