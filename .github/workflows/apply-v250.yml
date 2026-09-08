@@ -20,6 +20,9 @@ jobs:
       - name: Apply v2.5.0 patch
         run: python .github/scripts/apply_v250.py
 
+      - name: Update version-aware updater regression test
+        run: sed -i 's/version = "2.4.2"/version = "2.5.0"/' tests/test_auto_restart_update.py
+
       - name: Install dependencies
         run: python -m pip install packaging requests flask 'flet[all]>=0.86.5,<0.87'
 
