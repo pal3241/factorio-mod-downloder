@@ -23,13 +23,29 @@ jobs:
       - name: Apply v3.0.1 patch
         run: python .github/scripts/apply_v301.py
 
-      - name: Update version regression expectations
+      - name: Update maintained version and build regressions
         run: |
           python - <<'PY'
           from pathlib import Path
+
           p = Path('tests/test_auto_restart_update.py')
           text = p.read_text(encoding='utf-8')
           text = text.replace('version = "3.0.0"', 'version = "3.0.1"')
+          p.write_text(text, encoding='utf-8')
+
+          p = Path('scripts/build_exe.ps1')
+          text = p.read_text(encoding='utf-8')
+          text = text.replace('--product-version "3.0.0"', '--product-version "3.0.1"')
+          text = text.replace('--file-version "3.0.0.0"', '--file-version "3.0.1.0"')
+          p.write_text(text, encoding='utf-8')
+
+          p = Path('tests/test_v300_release.py')
+          text = p.read_text(encoding='utf-8')
+          text = text.replace(
+              'workflow = (ROOT / ".github" / "workflows" / "windows-exe-release.yml").read_text(encoding="utf-8")',
+              'build_script = (ROOT / "scripts" / "build_exe.ps1").read_text(encoding="utf-8")',
+          )
+          text = text.replace('assert "flet pack flet_app.py" in workflow', 'assert "flet pack flet_app.py" in build_script')
           p.write_text(text, encoding='utf-8')
           PY
 
