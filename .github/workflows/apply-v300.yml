@@ -10,6 +10,7 @@ permissions:
 
 env:
   PYTHONUTF8: '1'
+  PYTHONPATH: '.'
 
 jobs:
   patch-test-commit:
