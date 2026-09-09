@@ -6,8 +6,8 @@ flet pack flet_app.py `
   --name FactorioModManager `
   --icon assets/icon.ico `
   --product-name "Factorio Mod Manager" `
-  --product-version "3.0.0" `
-  --file-version "3.0.0.0" `
+  --product-version "3.0.1" `
+  --file-version "3.0.1.0" `
   --file-description "Factorio Mod Manager" `
   --company-name "Community" `
   --bundle-id "dev.factorio.modmanager" `

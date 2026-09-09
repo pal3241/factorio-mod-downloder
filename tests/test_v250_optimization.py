@@ -52,7 +52,7 @@ def main():
     assert "#4EA1FF" in flet
     assert "--sidebar: #08111F" in css
     assert "#4ea1ff" in css.lower()
-    assert 'version = "3.0.0"' in project
+    assert 'version = "3.0.1"' in project
     print("v2.5.0 optimization/theme tests: PASS")
 
 

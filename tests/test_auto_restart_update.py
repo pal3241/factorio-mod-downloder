@@ -21,7 +21,7 @@ def main():
     assert "Restarting automatically" in flet
     assert "schedule_restart(APP_DIR, delay=1.0)" in app
     assert "waitForAppRestart" in js
-    assert 'version = "3.0.0"' in pyproject
+    assert 'version = "3.0.1"' in pyproject
     print("Auto-restart updater tests: PASS")
 
 

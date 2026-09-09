@@ -1,17 +1,104 @@
 from __future__ import annotations
 
 import asyncio
+import ctypes
+import os
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
 import flet as ft
 
+from app_version import APP_VERSION
 from manager import FactorioModManager, ManagerError, BUILTIN_MODS
 from storage import app_data_dir
 from process_restart import schedule_restart, schedule_executable_replace_and_restart
 
 APP_DIR = Path(__file__).resolve().parent
 manager = FactorioModManager(app_data_dir() / "manager-config.json")
+
+
+def _version_tuple(value: str) -> tuple[int, ...]:
+    parts = []
+    for item in str(value or "").strip().lstrip("vV").split("."):
+        digits = "".join(ch for ch in item if ch.isdigit())
+        parts.append(int(digits or 0))
+    return tuple(parts or [0])
+
+
+def _windows_desktop_dir() -> Path | None:
+    if os.name != "nt":
+        return None
+    try:
+        buffer = ctypes.create_unicode_buffer(32768)
+        # CSIDL_DESKTOPDIRECTORY = 0x0010. This follows redirected/OneDrive Desktop too.
+        result = ctypes.windll.shell32.SHGetFolderPathW(None, 0x0010, None, 0, buffer)
+        if result == 0 and buffer.value:
+            return Path(buffer.value)
+    except Exception:
+        pass
+
+    candidates = []
+    if os.getenv("OneDrive"):
+        candidates.append(Path(os.environ["OneDrive"]) / "Desktop")
+    if os.getenv("USERPROFILE"):
+        candidates.append(Path(os.environ["USERPROFILE"]) / "Desktop")
+    candidates.append(Path.home() / "Desktop")
+    return next((path for path in candidates if path.exists()), candidates[-1])
+
+
+def _install_packaged_exe_on_desktop() -> bool:
+    """Copy/relaunch the packaged Windows EXE from Desktop on first portable run."""
+    if os.name != "nt" or not getattr(sys, "frozen", False) or "--web" in sys.argv:
+        return False
+
+    desktop = _windows_desktop_dir()
+    if desktop is None:
+        return False
+
+    try:
+        desktop.mkdir(parents=True, exist_ok=True)
+        current = Path(sys.executable).resolve()
+        target = (desktop / "FactorioModManager.exe").resolve()
+        version_marker = app_data_dir() / "desktop-exe-version.txt"
+
+        if current == target:
+            version_marker.write_text(APP_VERSION, encoding="utf-8")
+            return False
+
+        installed_version = "0"
+        if version_marker.exists():
+            try:
+                installed_version = version_marker.read_text(encoding="utf-8").strip() or "0"
+            except OSError:
+                pass
+
+        should_copy = (not target.exists()) or _version_tuple(APP_VERSION) > _version_tuple(installed_version)
+        if should_copy:
+            temporary = target.with_name("FactorioModManager.new.exe")
+            try:
+                if temporary.exists():
+                    temporary.unlink()
+                shutil.copy2(current, temporary)
+                os.replace(temporary, target)
+                version_marker.write_text(APP_VERSION, encoding="utf-8")
+            finally:
+                try:
+                    if temporary.exists():
+                        temporary.unlink()
+                except OSError:
+                    pass
+
+        if not target.exists():
+            return False
+
+        flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        subprocess.Popen([str(target)], cwd=str(desktop), creationflags=flags)
+        return True
+    except OSError:
+        # If Windows blocks the copy, keep running from the current location.
+        return False
 
 
 class FactorioFletUI:
@@ -1059,11 +1146,150 @@ class FactorioFletUI:
         exe = ft.TextField(label="Factorio executable", value=cfg.get("factorio_executable", ""), hint_text="C:\\Program Files\\Factorio\\bin\\x64\\factorio.exe")
         args = ft.TextField(label="Launch arguments", value=cfg.get("launch_args", ""))
         deps = ft.Switch(label="Automatically install required dependencies", value=bool(cfg.get("install_dependencies", True)))
-        menu_color = ft.TextField(label="Menu / sidebar color", value=cfg.get("ui_menu_color", "#09111E"), width=200)
-        background_color = ft.TextField(label="Main background color", value=cfg.get("ui_background_color", "#070B14"), width=200)
-        accent_color = ft.TextField(label="Accent color", value=cfg.get("ui_accent_color", "#4EA1FF"), width=200)
+        menu_color = ft.TextField(label="Kode HEX", value=cfg.get("ui_menu_color", "#09111E"), width=165)
+        background_color = ft.TextField(label="Kode HEX", value=cfg.get("ui_background_color", "#070B14"), width=165)
+        accent_color = ft.TextField(label="Kode HEX", value=cfg.get("ui_accent_color", "#4EA1FF"), width=165)
+
+        palette_colors = [
+            "#030407", "#070B14", "#09111E", "#0B1220", "#111827", "#1F2937",
+            "#334155", "#64748B", "#E2E8F0", "#FFFFFF", "#EF4444", "#F97316",
+            "#E48C30", "#F59E0B", "#EAB308", "#84CC16", "#22C55E", "#10B981",
+            "#14B8A6", "#06B6D4", "#0EA5E9", "#3B82F6", "#4EA1FF", "#6366F1",
+            "#8B5CF6", "#A855F7", "#D946EF", "#EC4899", "#F43F5E", "#A16207",
+        ]
+
+        def normalize_hex(value):
+            text = str(value or "").strip().upper()
+            if text and not text.startswith("#"):
+                text = "#" + text
+            if len(text) == 7 and text[0] == "#" and all(ch in "0123456789ABCDEF" for ch in text[1:]):
+                return text
+            return None
+
+        def make_color_editor(label, field):
+            initial = normalize_hex(field.value) or "#000000"
+            field.value = initial
+            preview = ft.Container(
+                width=44,
+                height=44,
+                bgcolor=initial,
+                border_radius=22,
+                border=ft.Border.all(2, "#71839A"),
+            )
+
+            def sync_field_preview(e):
+                selected = normalize_hex(field.value)
+                if selected:
+                    preview.bgcolor = selected
+                    self.page.update()
+
+            field.on_change = sync_field_preview
+
+            def open_color_dialog(e):
+                dialog_preview = ft.Container(
+                    width=70,
+                    height=70,
+                    bgcolor=preview.bgcolor,
+                    border_radius=35,
+                    border=ft.Border.all(3, "#B7C7D9"),
+                )
+                dialog_code = ft.TextField(label="Kode warna HEX", value=field.value, width=205)
+                error_text = ft.Text("", size=11, color="#FF8C86")
+
+                def set_dialog_color(value):
+                    selected = normalize_hex(value)
+                    if selected:
+                        dialog_code.value = selected
+                        dialog_preview.bgcolor = selected
+                        error_text.value = ""
+                        self.page.update()
+
+                def dialog_code_changed(ev):
+                    selected = normalize_hex(dialog_code.value)
+                    if selected:
+                        dialog_preview.bgcolor = selected
+                        error_text.value = ""
+                    else:
+                        error_text.value = "Gunakan format #RRGGBB, contoh #4EA1FF."
+                    self.page.update()
+
+                dialog_code.on_change = dialog_code_changed
+                swatches = [
+                    ft.Container(
+                        width=34,
+                        height=34,
+                        bgcolor=color,
+                        border_radius=17,
+                        border=ft.Border.all(2, "#D8E4F0" if color in ("#030407", "#070B14", "#09111E") else "#2A3A4E"),
+                        ink=True,
+                        on_click=lambda ev, selected=color: set_dialog_color(selected),
+                    )
+                    for color in palette_colors
+                ]
+
+                def apply_dialog_color(ev):
+                    selected = normalize_hex(dialog_code.value)
+                    if not selected:
+                        error_text.value = "Kode warna belum valid. Gunakan #RRGGBB."
+                        self.page.update()
+                        return
+                    field.value = selected
+                    preview.bgcolor = selected
+                    self.page.pop_dialog()
+                    self.page.update()
+
+                dialog = ft.AlertDialog(
+                    modal=True,
+                    title=ft.Text(f"Pilih warna — {label}"),
+                    content=ft.Container(
+                        width=430,
+                        content=ft.Column(spacing=13, controls=[
+                            ft.Row(spacing=14, vertical_alignment=ft.CrossAxisAlignment.CENTER, controls=[
+                                dialog_preview,
+                                ft.Column(spacing=3, controls=[
+                                    ft.Text("Preview warna", weight=ft.FontWeight.BOLD),
+                                    ft.Text("Pilih lingkaran warna atau masukkan kode HEX.", size=11, color="#8FA6BF"),
+                                ]),
+                            ]),
+                            ft.Divider(color="#263B52"),
+                            ft.Text("Pilihan warna", weight=ft.FontWeight.BOLD),
+                            ft.Row(wrap=True, spacing=8, run_spacing=8, controls=swatches),
+                            ft.Divider(color="#263B52"),
+                            ft.Row(wrap=True, controls=[dialog_code]),
+                            error_text,
+                        ]),
+                    ),
+                    actions=[
+                        ft.TextButton("Batal", on_click=lambda ev: self.page.pop_dialog()),
+                        ft.Button("Gunakan warna", icon=ft.Icons.CHECK, on_click=apply_dialog_color),
+                    ],
+                    actions_alignment=ft.MainAxisAlignment.END,
+                )
+                self.page.show_dialog(dialog)
+
+            card = ft.Container(
+                padding=12,
+                bgcolor="#101A29",
+                border=ft.Border.all(1, "#223A54"),
+                border_radius=9,
+                content=ft.Row(wrap=True, spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER, controls=[
+                    ft.Column(width=185, spacing=2, controls=[
+                        ft.Text(label, weight=ft.FontWeight.BOLD),
+                        ft.Text("Klik Pilih warna untuk membuka palet.", size=10, color="#7F93AA"),
+                    ]),
+                    preview,
+                    field,
+                    ft.Button("Pilih warna", icon=ft.Icons.COLOR_LENS_OUTLINED, on_click=open_color_dialog),
+                ]),
+            )
+            return card, preview
+
+        menu_color_editor, menu_color_preview = make_color_editor("Menu / sidebar", menu_color)
+        background_color_editor, background_color_preview = make_color_editor("Background utama", background_color)
+        accent_color_editor, accent_color_preview = make_color_editor("Accent / highlight", accent_color)
+
         preset = ft.Dropdown(
-            label="Color preset", value="custom", width=220,
+            label="Preset warna", value="custom", width=240,
             options=[
                 ft.DropdownOption(key="custom", text="Custom"),
                 ft.DropdownOption(key="midnight", text="Midnight Blue"),
@@ -1081,7 +1307,13 @@ class FactorioFletUI:
                 "factorio": ("#17130F", "#0E0D0C", "#E48C30"),
             }
             if e.control.value in choices:
-                menu_color.value, background_color.value, accent_color.value = choices[e.control.value]
+                menu_value, background_value, accent_value = choices[e.control.value]
+                menu_color.value = menu_value
+                background_color.value = background_value
+                accent_color.value = accent_value
+                menu_color_preview.bgcolor = menu_value
+                background_color_preview.bgcolor = background_value
+                accent_color_preview.bgcolor = accent_value
                 self.page.update()
         preset.on_select = apply_preset
 
@@ -1186,12 +1418,15 @@ class FactorioFletUI:
                 mods_dir, factorio_version, exe, args, deps,
                 ft.Divider(color="#1C314A"),
                 ft.Text("Appearance", weight=ft.FontWeight.BOLD),
-                ft.Text("Customize the menu/sidebar, main background and accent. Use #RRGGBB HEX colors.", size=11, color="#6F849B"),
-                ft.Row(wrap=True, controls=[preset, menu_color, background_color, accent_color]),
+                ft.Text("Pilih preset atau atur tiap warna dari palet lingkaran. Kode HEX dan preview warna selalu terlihat.", size=11, color="#6F849B"),
+                ft.Row(wrap=True, controls=[preset]),
+                menu_color_editor,
+                background_color_editor,
+                accent_color_editor,
                 ft.Row(wrap=True, controls=[ft.Button("Save & Apply", icon=ft.Icons.PALETTE, on_click=save), ft.Button("Backup state", icon=ft.Icons.BACKUP, on_click=backup)]),
                 ft.Divider(color="#1C314A"),
                 ft.Text("Application Update", weight=ft.FontWeight.BOLD),
-                ft.Text("Checks this Git clone against origin/main and only pulls fast-forward updates.", size=11, color="#6F849B"),
+                ft.Text("Source mode checks origin/main; packaged EXE mode checks GitHub Releases and updates the Desktop EXE.", size=11, color="#6F849B"),
                 ft.Row(wrap=True, controls=[check_update_btn, pull_update_btn]),
                 app_update_text,
             ])),
@@ -1217,6 +1452,9 @@ async def main(page: ft.Page):
 
 
 if __name__ == "__main__":
+    if _install_packaged_exe_on_desktop():
+        raise SystemExit(0)
+
     mode = "app"
     if "--web" in sys.argv:
         mode = "web"

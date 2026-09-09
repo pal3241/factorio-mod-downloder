@@ -221,3 +221,15 @@ factorio-mod-downloder/
 ## Notes
 
 Close Factorio before changing installed mod files or `mod-settings.dat`. Built-in mods such as `base`, `quality`, `space-age`, and `elevated-rails` are not downloaded as community dependencies. A newly released version can briefly be absent from the configured community mirror; the existing installed copy is left untouched if installation fails.
+
+## v3.0.1 — Visual color picker + Desktop portable install
+
+The Appearance page now shows a circular live preview beside every editable theme color,
+a visible `#RRGGBB` field, and a **Pilih warna** dialog with a palette of circular swatches.
+Preset colors continue to work and update every preview immediately.
+
+On Windows, a packaged `FactorioModManager.exe` launched from Downloads or another folder
+installs/relaunches itself from the user's real Windows Desktop folder. The app stores the
+Desktop build version in its application-data directory so an older portable copy cannot
+overwrite a newer Desktop build.
+

@@ -8,7 +8,7 @@ from app_version import APP_VERSION
 
 
 def main():
-    assert APP_VERSION == "3.0.0"
+    assert APP_VERSION == "3.0.1"
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         mgr = FactorioModManager(root / "config.json", project_root=ROOT)
@@ -28,14 +28,14 @@ def main():
 
     flet = (ROOT / "flet_app.py").read_text(encoding="utf-8")
     manager = (ROOT / "manager.py").read_text(encoding="utf-8")
-    workflow = (ROOT / ".github" / "workflows" / "windows-exe-release.yml").read_text(encoding="utf-8")
-    assert "Menu / sidebar color" in flet
+    build_script = (ROOT / "scripts" / "build_exe.ps1").read_text(encoding="utf-8")
+    assert "Menu / sidebar" in flet
     assert "Information\", \"Downloads\", \"Dependencies\", \"Changelog\", \"Metrics" in flet
     assert "schedule_executable_replace_and_restart" in flet
     assert "_release_update_status" in manager
-    assert "flet pack flet_app.py" in workflow
+    assert "flet pack flet_app.py" in build_script
     assert not (ROOT / "run_app.bat").exists()
-    print("v3.0.0 release tests: PASS")
+    print("v3.0.x release regression tests: PASS")
 
 
 if __name__ == "__main__":
