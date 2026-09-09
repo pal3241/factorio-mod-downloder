@@ -23,6 +23,20 @@ jobs:
       - name: Apply v3.0.0 patch
         run: python .github/scripts/apply_v300.py
 
+      - name: Update version-aware regression expectations
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          for name in ('tests/test_v250_optimization.py', 'tests/test_auto_restart_update.py'):
+              p = Path(name)
+              if not p.exists():
+                  continue
+              text = p.read_text(encoding='utf-8')
+              text = text.replace('version = "2.5.0"', 'version = "3.0.0"')
+              text = text.replace('version = "2.4.2"', 'version = "3.0.0"')
+              p.write_text(text, encoding='utf-8')
+          PY
+
       - name: Install dependencies
         run: python -m pip install packaging requests flask 'flet[all]>=0.86.5,<0.87' pillow
 
