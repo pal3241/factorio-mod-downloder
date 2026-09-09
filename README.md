@@ -1,34 +1,20 @@
-# Factorio Mod Manager Pro
+# Factorio Mod Manager
 
-Python Factorio mod manager with one shared core and three UI modes.
+Factorio Mod Manager 3 is a Windows-first mod manager with a Flet desktop UI, optional Flet/Flask web modes, tokenless Mod Portal browsing, dependency management, profiles, updates, and a real per-mod settings editor.
 
-## Modes
+## Windows — recommended
 
-### 1. Flet desktop app
+Download `FactorioModManager.exe` from the latest GitHub Release and run it directly.
 
-```powershell
-python launcher.py app
-```
+- no Python installation required
+- no `.bat` launcher required
+- single-file Windows executable
+- custom app/taskbar icon
+- settings, profiles, and backups remain in the writable OS application-data directory
 
-or double-click `run_app.bat`.
+## Source mode
 
-### 2. Flet web UI
-
-```powershell
-python launcher.py flet-web
-```
-
-Default: http://127.0.0.1:8550
-
-### 3. Classic Flask web UI
-
-```powershell
-python launcher.py web
-```
-
-Default: http://127.0.0.1:5000
-
-## Install
+Development/source users can still run the project with Python:
 
 ```powershell
 python -m venv .venv
@@ -37,35 +23,131 @@ pip install -r requirements.txt
 python launcher.py app
 ```
 
-## Core features
+Optional UIs:
+
+```powershell
+python launcher.py flet-web
+python launcher.py web
+```
+
+## 3.0 highlights
+
+### Full Mod Portal-style detail page
+
+Clicking a mod in **Search** now opens a dedicated detail view instead of a small lookup card. It includes:
+
+- large thumbnail, title, owner, summary, category, Factorio versions and download count
+- compatible version selector and install/download action
+- **Information** tab with owner, created date, source, homepage, license, latest version and description
+- **Downloads** tab with release history
+- **Dependencies** tab for the selected release
+- **Changelog** tab
+- **Metrics** tab with local/portal metadata
+- Back to Search navigation
+
+### Appearance customization
+
+Settings → Appearance supports editable HEX colors for:
+
+- menu / sidebar
+- main background
+- accent color
+
+Built-in presets:
+
+- Midnight Blue
+- Pure Black
+- Blue Slate
+- Factorio Dark
+- Custom
+
+Changes apply immediately after **Save & Apply** and persist between launches.
+
+### New Windows app icon
+
+The Windows EXE uses an original midnight-blue gear + orange download-arrow icon. Multi-resolution `.ico` and a 1024×1024 PNG source are generated under `assets/`.
+
+## Application updater
+
+### Packaged EXE
+
+The packaged Windows app checks **GitHub Releases**. When a newer `FactorioModManager.exe` release is available, the manager downloads it, exits safely, replaces the old EXE, and launches the new version.
+
+### Source clone
+
+Source mode keeps the safe updater based on:
+
+```text
+git fetch
+git pull --ff-only
+```
+
+Local uncommitted changes or diverged branches block automatic pull.
+
+## Mod-management features
 
 - automatic Factorio `mods` directory detection
-- install mods from Mod Portal URL or internal ID
+- custom mods directory
+- install from Mod Portal URL or internal ID
 - no Factorio username/token required
-- public re146 community storage for mod ZIPs
-- official Mod Portal API for metadata
-- SHA-1 validation before a downloaded ZIP reaches the live mods directory
+- community mirror ZIP downloads
+- official Mod Portal metadata and SHA-1 validation
+- staged verification before replacing an installed mod
 - recursive required-dependency resolver
-- select exact compatible mod version
-- enable/disable through `mod-list.json`
-- dependency diagnostics and one-click dependency repair
+- select an exact compatible version
+- enable/disable via `mod-list.json`
+- dependency diagnostics and one-click repair
 - update one / check updates / update all
-- duplicate mod detection + cleanup
+- duplicate detection and cleanup
 - invalid ZIP/info.json diagnostics
-- remove protection when other mods depend on a mod
-- mod profiles: save/apply/delete installed versions + enabled state
-- state backups with manifest
+- dependency-aware remove protection
+- profiles: save/apply/delete installed versions + enabled state
+- state backups
 - launch Factorio from the manager
 - custom Factorio executable and launch arguments
-- custom mods directory
 
-## Safety model
+## Search browser
 
-Downloads are staged in a temporary directory first. The file is SHA-1 checked against
-Factorio Mod Portal release metadata and its `info.json` is inspected before the verified
-ZIP replaces an installed version.
+Search includes:
 
-`mod-list.json` is backed up to `mod-list.json.bak` before writes.
+- Highlighted
+- Recently updated
+- Most downloaded
+- Trending
+- Search mods
+- title / ID / summary / author searching
+- include/exclude Space Age, category, and tag filters
+- Factorio-version-aware results
+- deprecated-mod toggle
+- pagination
+- thumbnails, author, summary, category, compatibility, downloads and tags
+- one-click Download / Update
+
+Search ordering is obtained from public Factorio Mod Portal browse/search pages; metadata is enriched with public Mod Portal API data. Downloaded ZIPs are SHA-1 verified before installation.
+
+## Real per-mod settings editor
+
+The ⚙ button for an installed mod scans:
+
+```text
+settings.lua
+settings-updates.lua
+settings-final-fixes.lua
+```
+
+and decodes local `mod-settings.dat` values. It exposes:
+
+- Startup settings
+- Map / runtime-global settings
+- Per-player settings
+- bool / int / double / string / color values
+- allowed-values and numeric validation when discoverable
+
+Writes are backed up, atomic, and verified by reading the file again. Close Factorio before saving mod settings.
+
+## Performance
+
+The manager caches installed-mod scans using a filesystem fingerprint, so unchanged ZIPs are not reopened on every refresh. Mod Portal full metadata also uses a short-lived cache to reduce repeated network requests.
 
 ## Default Factorio mod paths
 
@@ -87,55 +169,55 @@ macOS:
 ~/Library/Application Support/factorio/mods
 ```
 
+## Application data
+
+Runtime state is intentionally stored outside the executable/bundle. Depending on platform/Flet runtime it uses the app-private data directory, with Windows falling back to Local AppData.
+
+Typical Windows location:
+
+```text
+%LOCALAPPDATA%\FactorioModManagerPro\
+```
+
+## Build Windows EXE from source
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\build_exe.ps1
+```
+
+Output:
+
+```text
+dist\FactorioModManager.exe
+```
+
+The build uses Flet Pack / PyInstaller and embeds `assets/icon.ico`.
+
 ## Project layout
 
 ```text
-FactorioModManager-Pro/
-├── manager.py       # shared core / resolver / install / profiles / repair
-├── launcher.py      # app | flet-web | web selector
-├── flet_app.py      # desktop + Flet web interface
-├── app.py           # Flask API + classic web interface
+factorio-mod-downloder/
+├── app_version.py
+├── manager.py
+├── factorio_settings.py
+├── process_restart.py
+├── flet_app.py
+├── launcher.py
+├── app.py
+├── assets/
+│   ├── icon.png
+│   └── icon.ico
+├── scripts/
+│   └── build_exe.ps1
+├── tools/
+│   └── generate_icon.py
 ├── templates/
 ├── static/
-├── profiles/        # created automatically
-├── backups/         # created automatically
+├── tests/
 ├── requirements.txt
 └── pyproject.toml
 ```
 
 ## Notes
 
-Close Factorio before changing installed mod files. Built-in mods such as `base`,
-`quality`, `space-age` and `elevated-rails` are never downloaded as community dependencies.
-A newly released mod version may briefly be unavailable on the community mirror; in that
-case the existing installed mod is left untouched.
-
-## Application data
-
-Manager config, profiles and backups are stored in a writable OS application-data directory. Flet packaged app bundles are read-only in Flet 0.86+, so runtime data is intentionally kept outside the application bundle.
-
-
-## Factorio-style Search tab
-
-Both Flask Web and Flet Desktop/Web now include a Mod Portal-inspired browser:
-
-- Highlighted / Recently updated / Most downloaded / Trending / Search tabs
-- Search by title, internal ID, summary, or author
-- Include/exclude Space Age, category, and tag filters
-- Factorio-version aware results
-- Deprecated-mod toggle
-- Pagination
-- Thumbnail, author, summary, category, update time, Factorio compatibility, downloads and tags
-- One-click Download / Update into the configured Factorio `mods` folder
-- Exact Lookup remains available for pasting a Mod Portal URL or internal mod ID
-
-The search data comes from the public Mod Portal browse/search interfaces. Downloads still use the configured community mirror flow and are SHA-1 verified before installation.
-
-
-## Real per-mod settings editor (2.4)
-
-The Settings button for an installed mod now scans all three Factorio settings-stage files
-(`settings.lua`, `settings-updates.lua`, and `settings-final-fixes.lua`), decodes the local
-`mod-settings.dat` PropertyTree, and exposes Startup / Map / Per-player values in both Flet
-and Flask UIs. Saves are validated, backed up, written atomically, and re-read before success
-is reported. Close Factorio before writing settings.
+Close Factorio before changing installed mod files or `mod-settings.dat`. Built-in mods such as `base`, `quality`, `space-age`, and `elevated-rails` are not downloaded as community dependencies. A newly released version can briefly be absent from the configured community mirror; the existing installed copy is left untouched if installation fails.
