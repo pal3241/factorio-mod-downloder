@@ -1111,19 +1111,34 @@ class FactorioFletUI:
             self.page.update()
             try:
                 result = await self.run_bg(manager.app_update_status, True)
-                if not result.get("git_repo"):
+                mode = result.get("mode")
+                if mode == "release":
+                    if result.get("update_available"):
+                        size_mb = int(result.get("asset_size") or 0) / (1024 * 1024)
+                        app_update_text.value = f'EXE update available: v{result.get("current_version", "?")} → v{result.get("latest_version", "?")} · {size_mb:.1f} MB · {result.get("latest_subject") or ""}'
+                        app_update_text.color = "#e4b65f"
+                        pull_update_btn.text = "Download & Install"
+                        pull_update_btn.disabled = not bool(result.get("download_url"))
+                    else:
+                        app_update_text.value = f'Up to date · v{result.get("current_version", "?")}'
+                        app_update_text.color = "#8fbf75"
+                        pull_update_btn.text = "Download & Install"
+                        pull_update_btn.disabled = True
+                elif not result.get("git_repo"):
                     app_update_text.value = result.get("message", "Not a Git clone.")
                     app_update_text.color = "#e4b65f"
                     pull_update_btn.disabled = True
                 elif result.get("update_available"):
                     app_update_text.value = f'Update available: {result["local_short"]} → {result["remote_short"]} · {result["behind"]} commit(s) · {result.get("latest_subject") or ""}'
                     app_update_text.color = "#e4b65f"
+                    pull_update_btn.text = "Pull Update"
                     pull_update_btn.disabled = bool(result.get("dirty") or result.get("ahead"))
                     if result.get("dirty"):
                         app_update_text.value += " · local changes detected; commit/stash first"
                 else:
                     app_update_text.value = f'Up to date · {result.get("local_short", "?")}'
                     app_update_text.color = "#8fbf75"
+                    pull_update_btn.text = "Pull Update"
                     pull_update_btn.disabled = True
             except Exception as exc:
                 app_update_text.value = str(exc)
@@ -1135,7 +1150,7 @@ class FactorioFletUI:
 
         async def pull_app_update(e):
             e.control.disabled = True
-            app_update_text.value = "Pulling update..."
+            app_update_text.value = "Downloading / applying update..."
             app_update_text.color = "#8FA6BF"
             self.page.update()
             try:
