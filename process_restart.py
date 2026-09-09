@@ -67,3 +67,34 @@ subprocess.Popen(cmd, **kwargs)
     timer.daemon = True
     timer.start()
     return {"scheduled": True, "delay": float(delay), "command": command, "cwd": cwd}
+
+
+
+def schedule_executable_replace_and_restart(replacement_path: Path | str, delay: float = 0.8) -> dict:
+    """On Windows, exit this EXE, replace it with a downloaded EXE, then relaunch."""
+    replacement = Path(replacement_path).resolve()
+    current = Path(sys.executable).resolve()
+    if os.name != "nt" or not getattr(sys, "frozen", False):
+        raise RuntimeError("Executable replacement is only available in packaged Windows mode.")
+    if not replacement.exists():
+        raise FileNotFoundError(replacement)
+
+    def worker():
+        # PowerShell is external to the locked executable and survives our exit.
+        command = (
+            f'Start-Sleep -Milliseconds 1200; '
+            f'Copy-Item -LiteralPath {json.dumps(str(replacement))} -Destination {json.dumps(str(current))} -Force; '
+            f'Start-Process -FilePath {json.dumps(str(current))}'
+        )
+        flags = subprocess.CREATE_NEW_PROCESS_GROUP | getattr(subprocess, "DETACHED_PROCESS", 0)
+        subprocess.Popen(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", command],
+            close_fds=True,
+            creationflags=flags,
+        )
+        os._exit(0)
+
+    timer = threading.Timer(max(0.1, float(delay)), worker)
+    timer.daemon = True
+    timer.start()
+    return {"scheduled": True, "replacement": str(replacement), "current": str(current)}

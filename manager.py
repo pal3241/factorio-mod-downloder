@@ -7,6 +7,7 @@ import platform
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -23,6 +24,7 @@ import webbrowser
 
 import requests
 from packaging.version import InvalidVersion, Version
+from app_version import APP_VERSION
 from factorio_settings import (
     SETTINGS_STAGE_FILES,
     SettingsCodecError,
@@ -249,6 +251,9 @@ class FactorioModManager:
             "install_dependencies": True,
             "factorio_executable": "",
             "launch_args": "",
+            "ui_background_color": "#070B14",
+            "ui_menu_color": "#09111E",
+            "ui_accent_color": "#4EA1FF",
         }
 
         if not self.config_path.exists():
@@ -286,6 +291,13 @@ class FactorioModManager:
 
         if "launch_args" in updates:
             updates["launch_args"] = str(updates["launch_args"]).strip()
+
+        for color_key in ("ui_background_color", "ui_menu_color", "ui_accent_color"):
+            if color_key in updates:
+                value = str(updates[color_key]).strip().upper()
+                if not re.fullmatch(r"#[0-9A-F]{6}", value):
+                    raise ManagerError(f"{color_key} harus format HEX #RRGGBB, contoh #09111E.")
+                updates[color_key] = value
 
         self.config.update(updates)
         self.config_path.parent.mkdir(parents=True, exist_ok=True)
@@ -894,18 +906,47 @@ class FactorioModManager:
             thumbnail = f"https://assets-mod.factorio.com{thumbnail}"
 
         installed = self.installed_index().get(name)
+        license_data = data.get("license")
+        if isinstance(license_data, dict):
+            license_name = license_data.get("name") or license_data.get("title") or ""
+        else:
+            license_name = str(license_data or "")
+
+        factorio_branches = sorted(
+            {
+                factorio_branch(str(item.get("factorio_version") or ""))
+                for item in releases
+                if item.get("factorio_version")
+            },
+            key=version_obj,
+        )
+        factorio_display = (
+            f"{factorio_branches[0]} - {factorio_branches[-1]}"
+            if len(factorio_branches) > 1
+            else (factorio_branches[0] if factorio_branches else "?")
+        )
 
         return {
             "name": name,
             "title": data.get("title") or name,
             "owner": data.get("owner") or "",
             "summary": data.get("summary") or "",
+            "description": data.get("description") or data.get("summary") or "",
             "category": data.get("category") or "",
             "downloads_count": data.get("downloads_count") or 0,
             "deprecated": bool(data.get("deprecated", False)),
             "thumbnail": thumbnail,
             "releases": releases,
             "installed": installed,
+            "created_at": data.get("created_at") or "",
+            "updated_at": data.get("updated_at") or "",
+            "source_url": data.get("source_url") or "",
+            "homepage": data.get("homepage") or "",
+            "license": license_name,
+            "tags": list(data.get("tags") or []),
+            "changelog": data.get("changelog") or "",
+            "factorio_version_display": factorio_display,
+            "release_count": len(releases),
         }
 
     def _raw_to_release(self, mod_name: str, raw: dict[str, Any]) -> Release:
@@ -1853,14 +1894,60 @@ class FactorioModManager:
             raise ManagerError(detail)
         return result
 
+    def _release_update_status(self) -> dict[str, Any]:
+        """Check GitHub Releases when running as a packaged executable."""
+        url = "https://api.github.com/repos/pal3241/factorio-mod-downloder/releases/latest"
+        try:
+            response = self.session.get(url, timeout=20, headers={"Accept": "application/vnd.github+json"})
+            response.raise_for_status()
+            release = response.json()
+        except requests.RequestException as exc:
+            raise ManagerError(f"Gagal mengecek GitHub Release: {exc}") from exc
+
+        tag = str(release.get("tag_name") or "").lstrip("vV")
+        try:
+            latest = version_obj(tag)
+            current = version_obj(APP_VERSION)
+        except Exception as exc:
+            raise ManagerError("Versi GitHub Release tidak valid.") from exc
+
+        asset = next(
+            (
+                item for item in (release.get("assets") or [])
+                if str(item.get("name") or "").lower() == "factoriomodmanager.exe"
+            ),
+            None,
+        )
+        return {
+            "git_repo": False,
+            "mode": "release",
+            "packaged": True,
+            "current_version": APP_VERSION,
+            "latest_version": tag or APP_VERSION,
+            "local_short": f"v{APP_VERSION}",
+            "remote_short": f"v{tag or APP_VERSION}",
+            "behind": 1 if latest > current else 0,
+            "ahead": 0,
+            "dirty": False,
+            "update_available": latest > current,
+            "latest_subject": release.get("name") or release.get("tag_name") or "",
+            "download_url": (asset or {}).get("browser_download_url") or "",
+            "asset_size": int((asset or {}).get("size") or 0),
+            "message": "Update available" if latest > current else "Up to date",
+        }
+
     def app_update_status(self, fetch: bool = True) -> dict[str, Any]:
+        if getattr(sys, "frozen", False):
+            return self._release_update_status()
+
         git_dir = self.project_root / ".git"
         if not git_dir.exists():
             return {
                 "git_repo": False,
+                "mode": "source",
                 "update_available": False,
                 "dirty": False,
-                "message": "Folder aplikasi bukan Git clone. Check/Pull Update hanya tersedia jika project di-clone dengan Git.",
+                "message": "Folder aplikasi bukan Git clone. Gunakan GitHub Release EXE untuk updater tanpa Git.",
                 "project_root": str(self.project_root),
             }
 
@@ -1890,6 +1977,8 @@ class FactorioModManager:
 
         return {
             "git_repo": True,
+            "mode": "git",
+            "packaged": False,
             "project_root": str(self.project_root),
             "branch": branch,
             "remote": remote_url,
@@ -1908,6 +1997,45 @@ class FactorioModManager:
 
     def pull_app_update(self) -> dict[str, Any]:
         status = self.app_update_status(fetch=True)
+
+        if status.get("mode") == "release":
+            if not status.get("update_available"):
+                return {"changed": False, "before": status, "after": status, "restart_required": False, "output": "Already up to date."}
+            url = status.get("download_url") or ""
+            if not url:
+                raise ManagerError("Release terbaru tidak mempunyai asset FactorioModManager.exe.")
+            update_dir = Path(tempfile.gettempdir()) / "FactorioModManagerUpdate"
+            update_dir.mkdir(parents=True, exist_ok=True)
+            target = update_dir / f"FactorioModManager-{status['latest_version']}.exe"
+            try:
+                with self.session.get(url, stream=True, timeout=(15, 180)) as response:
+                    response.raise_for_status()
+                    total = 0
+                    with target.open("wb") as handle:
+                        for chunk in response.iter_content(chunk_size=1024 * 512):
+                            if not chunk:
+                                continue
+                            total += len(chunk)
+                            if total > 750 * 1024 * 1024:
+                                raise ManagerError("Ukuran update EXE tidak wajar (>750 MiB).")
+                            handle.write(chunk)
+            except (requests.RequestException, OSError) as exc:
+                target.unlink(missing_ok=True)
+                raise ManagerError(f"Gagal mengunduh update EXE: {exc}") from exc
+            if not target.exists() or target.stat().st_size < 1024 * 1024:
+                target.unlink(missing_ok=True)
+                raise ManagerError("File update EXE tidak valid atau terlalu kecil.")
+            after = dict(status)
+            after["local_short"] = f"v{status['latest_version']}"
+            return {
+                "changed": True,
+                "before": status,
+                "after": after,
+                "restart_required": True,
+                "replacement_path": str(target),
+                "output": "EXE update downloaded.",
+            }
+
         if not status.get("git_repo"):
             raise ManagerError(status.get("message") or "Aplikasi bukan Git clone.")
         if status.get("dirty"):

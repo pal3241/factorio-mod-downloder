@@ -1,5 +1,16 @@
 # Changelog
 
+## 3.0.0
+
+- Windows distribution moved from BAT launchers to a single-file `FactorioModManager.exe`.
+- New custom application icon for EXE, taskbar and window identity.
+- Added appearance customization for menu/sidebar, main background and accent colors.
+- Search results now open a full Mod Portal-style detail page with Information, Downloads, Dependencies, Changelog and Metrics views.
+- Packaged EXE updater now checks GitHub Releases instead of requiring Git.
+- Source-clone updater keeps fast-forward `git pull` support.
+- Retains v2.5 installed-mod and Mod Portal caching optimizations.
+
+
 ## 2.2.0
 
 - Fixed Search Mods HTTP 403 in no-login mode.

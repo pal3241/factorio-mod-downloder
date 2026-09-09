@@ -1,6 +1,6 @@
 [project]
 name = "factorio-mod-manager-pro"
-version = "2.5.0"
+version = "3.0.0"
 description = "Factorio mod manager with Flask web and Flet desktop/web UI"
 requires-python = ">=3.11"
 dependencies = [
@@ -11,6 +11,7 @@ dependencies = [
 ]
 
 [tool.flet]
+icon_background = "#08111F"
 org = "dev.factorio.modmanager"
 product = "Factorio Mod Manager"
 company = "Community"

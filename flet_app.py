@@ -8,7 +8,7 @@ import flet as ft
 
 from manager import FactorioModManager, ManagerError, BUILTIN_MODS
 from storage import app_data_dir
-from process_restart import schedule_restart
+from process_restart import schedule_restart, schedule_executable_replace_and_restart
 
 APP_DIR = Path(__file__).resolve().parent
 manager = FactorioModManager(app_data_dir() / "manager-config.json")
@@ -23,11 +23,16 @@ class FactorioFletUI:
         self.current_mod = None
         self.updates = []
 
+        cfg = manager.get_config()
+        self.ui_background_color = cfg.get("ui_background_color", "#070B14")
+        self.ui_menu_color = cfg.get("ui_menu_color", "#09111E")
+        self.ui_accent_color = cfg.get("ui_accent_color", "#4EA1FF")
+
         page.title = "Factorio Mod Manager"
         page.theme_mode = ft.ThemeMode.DARK
-        page.theme = ft.Theme(color_scheme_seed="#4EA1FF")
+        page.theme = ft.Theme(color_scheme_seed=self.ui_accent_color)
         page.padding = 0
-        page.bgcolor = "#070B14"
+        page.bgcolor = self.ui_background_color
         if not page.web:
             page.window.width = 1240
             page.window.height = 800
@@ -43,7 +48,7 @@ class FactorioFletUI:
             label_type=ft.NavigationRailLabelType.ALL,
             min_width=92,
             group_alignment=-0.9,
-            bgcolor="#09111E",
+            bgcolor=self.ui_menu_color,
             destinations=[
                 ft.NavigationRailDestination(icon=ft.Icons.INVENTORY_2_OUTLINED, selected_icon=ft.Icons.INVENTORY_2, label="Installed"),
                 ft.NavigationRailDestination(icon=ft.Icons.SEARCH, selected_icon=ft.Icons.TRAVEL_EXPLORE, label="Search"),
@@ -86,6 +91,16 @@ class FactorioFletUI:
             ],
         )
         page.add(self.root)
+
+    def apply_runtime_theme(self, cfg=None):
+        cfg = cfg or manager.get_config()
+        self.ui_background_color = cfg.get("ui_background_color", "#070B14")
+        self.ui_menu_color = cfg.get("ui_menu_color", "#09111E")
+        self.ui_accent_color = cfg.get("ui_accent_color", "#4EA1FF")
+        self.page.bgcolor = self.ui_background_color
+        self.page.theme = ft.Theme(color_scheme_seed=self.ui_accent_color)
+        self.nav.bgcolor = self.ui_menu_color
+        self.page.update()
 
     def set_status(self, text: str):
         self.status.value = text
@@ -629,61 +644,193 @@ class FactorioFletUI:
             if not value:
                 return
             self.set_status("Loading mod details...")
-            detail_box.controls[:] = [ft.ProgressRing()]
+            detail_box.visible = True
+            detail_box.controls[:] = [ft.Container(padding=30, alignment=ft.Alignment.CENTER, content=ft.ProgressRing())]
+            try:
+                browse_area.visible = False
+            except NameError:
+                pass
             self.page.update()
             try:
                 mod = await self.run_bg(manager.portal_view, value)
+                self.title.value = mod["title"]
                 branch = ".".join(str(manager.config["factorio_version"]).split(".")[:2])
-                releases = [r for r in mod["releases"] if ".".join(str(r["factorio_version"] or "").split(".")[:2]) == branch]
-                if not releases:
-                    detail_box.controls[:] = [ft.Container(
-                        padding=12, border=ft.Border.all(1, "#5c302d"), border_radius=8,
-                        content=ft.Text(f'No compatible release for Factorio {branch}.', color="#ff8c86"),
-                    )]
-                    return
-
+                releases = [
+                    r for r in mod["releases"]
+                    if ".".join(str(r["factorio_version"] or "").split(".")[:2]) == branch
+                ]
                 versions = ft.Dropdown(
                     label="Version",
-                    value=releases[0]["version"],
-                    options=[ft.DropdownOption(key=r["version"], text=f'{r["version"]} — Factorio {r["factorio_version"]}') for r in releases],
-                    expand=True,
+                    value=releases[0]["version"] if releases else None,
+                    options=[
+                        ft.DropdownOption(key=r["version"], text=f'{r["version"]} — Factorio {r["factorio_version"]}')
+                        for r in releases
+                    ],
+                    width=270,
+                    disabled=not bool(releases),
                 )
 
+                async def back_to_search(ev=None):
+                    detail_box.visible = False
+                    browse_area.visible = True
+                    self.title.value = "Search Mods"
+                    self.page.update()
+
                 async def install_selected(ev):
+                    if not versions.value:
+                        self.notify(f'No compatible release for Factorio {branch}.', True)
+                        return
+                    ev.control.disabled = True
                     self.set_status(f'Installing {mod["name"]}...')
+                    self.page.update()
                     try:
                         result = await self.run_bg(manager.install, mod["name"], versions.value, None, True)
-                        self.notify(f'Installed {mod["title"]} {versions.value}.' if result["installed"] else f'{mod["title"]} already current.')
-                        await run_search(False)
+                        self.notify(
+                            f'Installed {mod["title"]} {versions.value}.'
+                            if result["installed"] else f'{mod["title"]} already current.'
+                        )
                     except Exception as exc:
                         self.notify(str(exc), True)
                     finally:
+                        ev.control.disabled = False
                         self.set_status("Ready")
+                        self.page.update()
 
                 if mod.get("thumbnail"):
-                    icon = ft.Image(src=mod["thumbnail"], width=82, height=82, fit=ft.BoxFit.COVER)
+                    hero_icon = ft.Image(src=mod["thumbnail"], width=170, height=170, fit=ft.BoxFit.COVER)
                 else:
-                    icon = ft.Container(width=82, height=82, alignment=ft.Alignment.CENTER, bgcolor="#13263C", content=ft.Text((mod["title"] or mod["name"])[:2].upper(), size=24, weight=ft.FontWeight.BOLD, color="#f2b25c"))
+                    hero_icon = ft.Container(
+                        width=170, height=170, alignment=ft.Alignment.CENTER,
+                        bgcolor="#13243A", border_radius=10,
+                        content=ft.Text((mod["title"] or mod["name"])[:2].upper(), size=44, weight=ft.FontWeight.BOLD, color=self.ui_accent_color),
+                    )
 
-                detail_box.controls[:] = [ft.Container(
-                    padding=14,
-                    bgcolor="#0D1726",
-                    border=ft.Border.all(1, "#24415F"),
-                    border_radius=9,
-                    content=ft.Column(spacing=10, controls=[
-                        ft.Row(vertical_alignment=ft.CrossAxisAlignment.START, controls=[
-                            icon,
-                            ft.Column(expand=True, spacing=4, controls=[
-                                ft.Text(mod["title"], size=20, weight=ft.FontWeight.BOLD, color="#f3d6a5"),
-                                ft.Text(f'by {mod["owner"]} · {mod["downloads_count"]:,} downloads', size=11, color="#e99828"),
-                                ft.Text(mod["summary"], size=12, color="#D7E7F8"),
+                release = releases[0] if releases else (mod["releases"][0] if mod["releases"] else None)
+                tab_content = ft.Column(spacing=10)
+                tab_buttons = ft.Row(spacing=5, scroll=ft.ScrollMode.AUTO)
+                active_tab = {"name": "Information"}
+
+                def text_or_na(value):
+                    return str(value).strip() if str(value or "").strip() else "N/A"
+
+                def metadata_row(left_label, left_value, right_label, right_value):
+                    return ft.Row(controls=[
+                        ft.Container(expand=True, padding=10, bgcolor="#101C2D", border=ft.Border.all(1, "#1C314A"), content=ft.Row(controls=[ft.Text(left_label + ":", width=105, weight=ft.FontWeight.BOLD), ft.Text(text_or_na(left_value), expand=True, selectable=True)])),
+                        ft.Container(expand=True, padding=10, bgcolor="#101C2D", border=ft.Border.all(1, "#1C314A"), content=ft.Row(controls=[ft.Text(right_label + ":", width=115, weight=ft.FontWeight.BOLD), ft.Text(text_or_na(right_value), expand=True, selectable=True)])),
+                    ])
+
+                def render_tab(name):
+                    active_tab["name"] = name
+                    for button in tab_buttons.controls:
+                        button.bgcolor = self.ui_accent_color if button.data == name else "#132033"
+                        button.color = "#07101B" if button.data == name else "#DCE9F6"
+                    tab_content.controls.clear()
+                    current_release = next((r for r in mod["releases"] if r["version"] == versions.value), release)
+
+                    if name == "Information":
+                        latest = mod["releases"][0] if mod["releases"] else {}
+                        tab_content.controls.extend([
+                            metadata_row("Owner", mod.get("owner"), "Created", mod.get("created_at")),
+                            metadata_row("Source", mod.get("source_url"), "Latest Version", latest.get("version")),
+                            metadata_row("Homepage", mod.get("homepage"), "Factorio version", mod.get("factorio_version_display")),
+                            metadata_row("License", mod.get("license"), "Downloaded by", f'{int(mod.get("downloads_count") or 0):,} users'),
+                            ft.Container(
+                                padding=16, margin=ft.Margin.only(top=6), bgcolor="#0D1726",
+                                border=ft.Border.all(1, "#1C314A"), border_radius=8,
+                                content=ft.Text(mod.get("description") or mod.get("summary") or "No description.", selectable=True),
+                            ),
+                        ])
+                    elif name == "Downloads":
+                        for item in mod["releases"]:
+                            compatible = ".".join(str(item.get("factorio_version") or "").split(".")[:2]) == branch
+                            tab_content.controls.append(ft.Container(
+                                padding=11, bgcolor="#0D1726", border=ft.Border.all(1, "#1C314A"), border_radius=7,
+                                content=ft.Row(alignment=ft.MainAxisAlignment.SPACE_BETWEEN, controls=[
+                                    ft.Column(spacing=2, controls=[
+                                        ft.Text(f'v{item["version"]}', weight=ft.FontWeight.BOLD),
+                                        ft.Text(f'Factorio {item.get("factorio_version") or "?"} · {item.get("released_at") or ""}', size=10, color="#8FA6BF"),
+                                    ]),
+                                    ft.Text("Compatible" if compatible else "Other branch", color="#8FC7FF" if compatible else "#7C8DA1"),
+                                ]),
+                            ))
+                    elif name == "Dependencies":
+                        deps = (current_release or {}).get("dependencies") or []
+                        if not deps:
+                            tab_content.controls.append(ft.Text("No dependencies declared.", color="#8FA6BF"))
+                        for dep in deps:
+                            color = "#FF8C86" if dep.get("kind") == "incompatible" else ("#D8B56C" if dep.get("kind") == "optional" else "#DCE9F6")
+                            tab_content.controls.append(ft.Container(
+                                padding=10, bgcolor="#0D1726", border=ft.Border.all(1, "#1C314A"), border_radius=7,
+                                content=ft.Row(controls=[ft.Icon(ft.Icons.ACCOUNT_TREE_OUTLINED, color=color), ft.Text(dep.get("raw") or dep.get("name"), color=color)]),
+                            ))
+                    elif name == "Changelog":
+                        tab_content.controls.append(ft.Container(
+                            padding=15, bgcolor="#0D1726", border=ft.Border.all(1, "#1C314A"), border_radius=8,
+                            content=ft.Text(mod.get("changelog") or "No changelog supplied by the Mod Portal API.", selectable=True),
+                        ))
+                    else:
+                        tab_content.controls.extend([
+                            metadata_row("Total downloads", f'{int(mod.get("downloads_count") or 0):,}', "Releases", mod.get("release_count")),
+                            metadata_row("Category", mod.get("category"), "Updated", mod.get("updated_at")),
+                            metadata_row("Installed", (mod.get("installed") or {}).get("version") if mod.get("installed") else "No", "Portal ID", mod.get("name")),
+                        ])
+                    self.page.update()
+
+                async def select_tab(ev):
+                    render_tab(ev.control.data)
+
+                for label in ("Information", "Downloads", "Dependencies", "Changelog", "Metrics"):
+                    tab_buttons.controls.append(ft.Button(label, data=label, on_click=select_tab, bgcolor="#132033", color="#DCE9F6"))
+
+                async def version_changed(ev):
+                    if active_tab["name"] == "Dependencies":
+                        render_tab("Dependencies")
+                versions.on_select = version_changed
+
+                header_stats = ft.Column(width=205, spacing=7, controls=[
+                    ft.Text(mod.get("category") or "No category", size=12),
+                    ft.Text(f'Factorio {mod.get("factorio_version_display") or "?"}', size=12),
+                    ft.Text(f'↓ {int(mod.get("downloads_count") or 0):,}', size=12),
+                    ft.Text(f'{mod.get("release_count", 0)} releases', size=12),
+                ])
+
+                detail_box.controls[:] = [
+                    ft.Column(spacing=14, controls=[
+                        ft.Row(controls=[ft.Button("Back to Search", icon=ft.Icons.ARROW_BACK, on_click=back_to_search)]),
+                        ft.Container(
+                            padding=14, bgcolor="#0B1422", border=ft.Border.all(1, "#1C314A"), border_radius=9,
+                            content=ft.Column(spacing=12, controls=[
+                                ft.Row(vertical_alignment=ft.CrossAxisAlignment.START, controls=[
+                                    hero_icon,
+                                    ft.Column(expand=True, spacing=7, controls=[
+                                        ft.Text(mod["title"], size=25, weight=ft.FontWeight.BOLD, color="#EAF3FC"),
+                                        ft.Text(f'by {mod["owner"]}', color=self.ui_accent_color, weight=ft.FontWeight.BOLD),
+                                        ft.Divider(color="#1C314A"),
+                                        ft.Text(mod.get("summary") or "", size=13, selectable=True),
+                                    ]),
+                                    header_stats,
+                                ]),
+                                ft.Row(alignment=ft.MainAxisAlignment.SPACE_BETWEEN, controls=[
+                                    ft.Row(wrap=True, controls=[
+                                        ft.Container(padding=ft.Padding.symmetric(horizontal=9, vertical=6), bgcolor="#13243A", border_radius=5, content=ft.Text(tag, size=10))
+                                        for tag in (mod.get("tags") or [])[:8]
+                                    ]),
+                                    ft.Row(controls=[versions, ft.Button("Download / Install", icon=ft.Icons.DOWNLOAD, on_click=install_selected, disabled=not bool(releases))]),
+                                ]),
                             ]),
-                        ]),
-                        ft.Row(controls=[versions, ft.Button("Install", icon=ft.Icons.DOWNLOAD, bgcolor="#49b65b", color="#07160a", on_click=install_selected)]),
-                    ]),
-                )]
+                        ),
+                        ft.Container(
+                            padding=10, bgcolor="#0B1422", border=ft.Border.all(1, "#1C314A"), border_radius=9,
+                            content=ft.Column(spacing=10, controls=[tab_buttons, ft.Divider(color="#1C314A"), tab_content]),
+                        ),
+                    ])
+                ]
+                render_tab("Information")
             except Exception as exc:
-                detail_box.controls[:] = [ft.Text(str(exc), color="#ff8c86")]
+                detail_box.controls[:] = [
+                    ft.Button("Back to Search", icon=ft.Icons.ARROW_BACK, on_click=lambda e: None),
+                    ft.Text(str(exc), color="#ff8c86"),
+                ]
             finally:
                 self.set_status("Ready")
                 self.page.update()
@@ -831,12 +978,13 @@ class FactorioFletUI:
             results_col,
         ])
 
-        self.body.controls.extend([
+        browse_area = ft.Column(spacing=12, controls=[
             tab_row,
             search_bar,
-            detail_box,
             ft.Row(vertical_alignment=ft.CrossAxisAlignment.START, controls=[filter_panel, results_panel]),
         ])
+        detail_box.visible = False
+        self.body.controls.extend([detail_box, browse_area])
         await run_search(False)
 
     async def render_updates(self, check=False):
@@ -911,13 +1059,42 @@ class FactorioFletUI:
         exe = ft.TextField(label="Factorio executable", value=cfg.get("factorio_executable", ""), hint_text="C:\\Program Files\\Factorio\\bin\\x64\\factorio.exe")
         args = ft.TextField(label="Launch arguments", value=cfg.get("launch_args", ""))
         deps = ft.Switch(label="Automatically install required dependencies", value=bool(cfg.get("install_dependencies", True)))
+        menu_color = ft.TextField(label="Menu / sidebar color", value=cfg.get("ui_menu_color", "#09111E"), width=200)
+        background_color = ft.TextField(label="Main background color", value=cfg.get("ui_background_color", "#070B14"), width=200)
+        accent_color = ft.TextField(label="Accent color", value=cfg.get("ui_accent_color", "#4EA1FF"), width=200)
+        preset = ft.Dropdown(
+            label="Color preset", value="custom", width=220,
+            options=[
+                ft.DropdownOption(key="custom", text="Custom"),
+                ft.DropdownOption(key="midnight", text="Midnight Blue"),
+                ft.DropdownOption(key="black", text="Pure Black"),
+                ft.DropdownOption(key="slate", text="Blue Slate"),
+                ft.DropdownOption(key="factorio", text="Factorio Dark"),
+            ],
+        )
+
+        async def apply_preset(e):
+            choices = {
+                "midnight": ("#09111E", "#070B14", "#4EA1FF"),
+                "black": ("#080A0E", "#030407", "#65A9FF"),
+                "slate": ("#111B2A", "#0B1220", "#68A7E8"),
+                "factorio": ("#17130F", "#0E0D0C", "#E48C30"),
+            }
+            if e.control.value in choices:
+                menu_color.value, background_color.value, accent_color.value = choices[e.control.value]
+                self.page.update()
+        preset.on_select = apply_preset
+
         async def save(e):
             try:
                 await self.run_bg(manager.save_config, {
                     "mods_dir": mods_dir.value.strip(), "factorio_version": factorio_version.value.strip(),
                     "install_dependencies": deps.value, "factorio_executable": exe.value.strip(), "launch_args": args.value.strip(),
+                    "ui_menu_color": menu_color.value.strip(), "ui_background_color": background_color.value.strip(),
+                    "ui_accent_color": accent_color.value.strip(),
                 })
-                self.notify("Settings saved.")
+                self.apply_runtime_theme(manager.get_config())
+                self.notify("Settings saved and appearance applied.")
             except Exception as exc: self.notify(str(exc), True)
         async def backup(e):
             try:
@@ -967,9 +1144,13 @@ class FactorioFletUI:
                     after = result.get("after") or {}
                     app_update_text.value = f'Updated to {after.get("local_short", "new commit")}. Restarting automatically...'
                     app_update_text.color = "#8fbf75"
-                    self.notify("Update pulled successfully. Restarting Factorio Mod Manager...")
+                    self.notify("Update installed successfully. Restarting Factorio Mod Manager...")
                     self.page.update()
-                    schedule_restart(APP_DIR, delay=0.8)
+                    replacement = result.get("replacement_path")
+                    if replacement:
+                        schedule_executable_replace_and_restart(replacement, delay=0.8)
+                    else:
+                        schedule_restart(APP_DIR, delay=0.8)
                     return
                 else:
                     app_update_text.value = "Already up to date."
@@ -988,7 +1169,11 @@ class FactorioFletUI:
         self.body.controls.extend([
             ft.Container(padding=16, border=ft.Border.all(1, "#1C314A"), border_radius=10, bgcolor="#0D1726", content=ft.Column(controls=[
                 mods_dir, factorio_version, exe, args, deps,
-                ft.Row(wrap=True, controls=[ft.Button("Save Settings", icon=ft.Icons.SAVE, on_click=save), ft.Button("Backup state", icon=ft.Icons.BACKUP, on_click=backup)]),
+                ft.Divider(color="#1C314A"),
+                ft.Text("Appearance", weight=ft.FontWeight.BOLD),
+                ft.Text("Customize the menu/sidebar, main background and accent. Use #RRGGBB HEX colors.", size=11, color="#6F849B"),
+                ft.Row(wrap=True, controls=[preset, menu_color, background_color, accent_color]),
+                ft.Row(wrap=True, controls=[ft.Button("Save & Apply", icon=ft.Icons.PALETTE, on_click=save), ft.Button("Backup state", icon=ft.Icons.BACKUP, on_click=backup)]),
                 ft.Divider(color="#1C314A"),
                 ft.Text("Application Update", weight=ft.FontWeight.BOLD),
                 ft.Text("Checks this Git clone against origin/main and only pulls fast-forward updates.", size=11, color="#6F849B"),
