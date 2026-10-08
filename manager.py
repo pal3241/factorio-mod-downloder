@@ -409,7 +409,19 @@ class FactorioModManager:
 
     def _auto_detect_factorio(self, persist: bool = False) -> dict[str, Any]:
         installations = self.detect_factorio_installations()
-        selected = installations[0] if installations else None
+        selected = None
+        configured = str(self.config.get("factorio_executable") or "").strip()
+        if configured:
+            try:
+                configured_key = str(Path(configured).expanduser().resolve()).lower()
+            except OSError:
+                configured_key = str(Path(configured).expanduser()).lower()
+            selected = next(
+                (item for item in installations if str(Path(item["executable"]).resolve()).lower() == configured_key),
+                None,
+            )
+        if selected is None and installations:
+            selected = installations[0]
         changed = False
         if selected:
             if self.config.get("factorio_executable") != selected["executable"]:
