@@ -143,6 +143,32 @@ def factorio_branch(version: str) -> str:
     return str(version).strip()
 
 
+def factorio_version_compatible(mod_version: str, target_version: str) -> bool:
+    """Check a mod's declared Factorio branch against the installed branch."""
+    target = factorio_branch(target_version)
+    raw = str(mod_version or "").strip()
+    if not raw:
+        return False
+
+    branches = re.findall(r"(?<!\d)(\d+\.\d+)(?!\d)", raw)
+    if not branches:
+        return factorio_branch(raw) == target
+
+    if target in branches:
+        return True
+
+    # Accept explicit ranges such as 1.1 - 2.1.
+    if len(branches) >= 2 and ("-" in raw or "–" in raw):
+        try:
+            ordered = sorted({Version(branch) for branch in branches})
+            target_v = Version(target)
+            return ordered[0] <= target_v <= ordered[-1]
+        except InvalidVersion:
+            return False
+
+    return False
+
+
 def default_mods_dir() -> Path:
     system = platform.system().lower()
 
@@ -242,12 +268,13 @@ class FactorioModManager:
         self._portal_cache_ttl = 120.0
 
         self.config = self._load_config()
+        self.factorio_detection = self._auto_detect_factorio(persist=True)
         self.mods_dir.mkdir(parents=True, exist_ok=True)
 
     def _load_config(self) -> dict[str, Any]:
         defaults = {
             "mods_dir": str(default_mods_dir()),
-            "factorio_version": "2.0",
+            "factorio_version": "2.1",
             "install_dependencies": True,
             "factorio_executable": "",
             "launch_args": "",
@@ -268,6 +295,153 @@ class FactorioModManager:
             pass
 
         return defaults
+
+    def _factorio_version_from_executable(self, executable: Path) -> str | None:
+        """Read the installed Factorio version using the official --version flag."""
+        if not executable.exists() or not executable.is_file():
+            return None
+        try:
+            result = subprocess.run(
+                [str(executable), "--version"],
+                cwd=str(executable.parent),
+                text=True,
+                capture_output=True,
+                timeout=10,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+
+        output = "\n".join(part for part in (result.stdout, result.stderr) if part)
+        match = re.search(r"(?im)^\s*Version:\s*(\d+(?:\.\d+){1,2})", output)
+        if not match:
+            match = re.search(r"\b(\d+\.\d+(?:\.\d+)?)\b", output)
+        return match.group(1) if match else None
+
+    def _factorio_candidate_paths(self) -> list[Path]:
+        candidates: list[Path] = []
+
+        configured = str(self.config.get("factorio_executable") or "").strip()
+        if configured:
+            candidates.append(Path(configured).expanduser())
+
+        system = platform.system().lower()
+        if system == "windows":
+            program_files = [os.getenv("ProgramFiles"), os.getenv("ProgramW6432"), os.getenv("ProgramFiles(x86)")]
+            roots = [Path(value) for value in program_files if value]
+            for root in roots:
+                candidates.extend([
+                    root / "Factorio" / "bin" / "x64" / "factorio.exe",
+                    root / "Steam" / "steamapps" / "common" / "Factorio" / "bin" / "x64" / "factorio.exe",
+                ])
+
+            # Detect additional Steam libraries such as D:\SteamLibrary.
+            for steam_root in [Path(value) / "Steam" for value in roots]:
+                vdf = steam_root / "steamapps" / "libraryfolders.vdf"
+                if not vdf.exists():
+                    continue
+                try:
+                    text = vdf.read_text(encoding="utf-8", errors="ignore")
+                    for raw_name in re.findall(r'"path"\s+"([^"]+)"', text):
+                        library = Path(raw_name.replace("\\", os.sep))
+                        candidates.append(
+                            library / "steamapps" / "common" / "Factorio" / "bin" / "x64" / "factorio.exe"
+                        )
+                except OSError:
+                    pass
+
+            local_app_data = os.getenv("LOCALAPPDATA")
+            if local_app_data:
+                candidates.append(Path(local_app_data) / "Programs" / "Factorio" / "bin" / "x64" / "factorio.exe")
+        elif system == "darwin":
+            candidates.extend([
+                Path("/Applications/factorio.app/Contents/bin/x64/factorio"),
+                Path.home() / "Library/Application Support/Steam/steamapps/common/Factorio/factorio.app/Contents/bin/x64/factorio",
+            ])
+        else:
+            candidates.extend([
+                Path.home() / ".steam/steam/steamapps/common/Factorio/bin/x64/factorio",
+                Path.home() / ".local/share/Steam/steamapps/common/Factorio/bin/x64/factorio",
+                Path.home() / ".factorio/bin/x64/factorio",
+                Path("/opt/factorio/bin/x64/factorio"),
+            ])
+
+        which = shutil.which("factorio")
+        if which:
+            candidates.append(Path(which))
+
+        unique: list[Path] = []
+        seen: set[str] = set()
+        for candidate in candidates:
+            try:
+                key = str(candidate.expanduser().resolve()).lower()
+            except OSError:
+                key = str(candidate.expanduser()).lower()
+            if key not in seen:
+                seen.add(key)
+                unique.append(candidate.expanduser())
+        return unique
+
+    def detect_factorio_installations(self) -> list[dict[str, Any]]:
+        """Detect installed Factorio executables and their exact versions."""
+        installations: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for executable in self._factorio_candidate_paths():
+            try:
+                resolved = executable.resolve()
+            except OSError:
+                resolved = executable
+            key = str(resolved).lower()
+            if key in seen or not resolved.exists():
+                continue
+            version = self._factorio_version_from_executable(resolved)
+            if not version:
+                continue
+            seen.add(key)
+            installations.append({
+                "executable": str(resolved),
+                "version": version,
+                "branch": factorio_branch(version),
+                "source": "configured" if str(executable) == str(self.config.get("factorio_executable") or "") else "auto",
+            })
+
+        installations.sort(key=lambda item: version_obj(item["version"]), reverse=True)
+        return installations
+
+    def _auto_detect_factorio(self, persist: bool = False) -> dict[str, Any]:
+        installations = self.detect_factorio_installations()
+        selected = installations[0] if installations else None
+        changed = False
+        if selected:
+            if self.config.get("factorio_executable") != selected["executable"]:
+                self.config["factorio_executable"] = selected["executable"]
+                changed = True
+            if self.config.get("factorio_version") != selected["version"]:
+                self.config["factorio_version"] = selected["version"]
+                changed = True
+
+            if persist and changed:
+                try:
+                    self.config_path.parent.mkdir(parents=True, exist_ok=True)
+                    self.config_path.write_text(
+                        json.dumps(self.config, indent=2, ensure_ascii=False),
+                        encoding="utf-8",
+                    )
+                except OSError:
+                    pass
+
+        return {
+            "detected": bool(selected),
+            "selected": selected,
+            "installations": installations,
+            "changed": changed,
+            "factorio_version": selected["version"] if selected else self.config.get("factorio_version", "2.1"),
+            "factorio_branch": factorio_branch(selected["version"]) if selected else factorio_branch(self.config.get("factorio_version", "2.1")),
+        }
+
+    def detect_factorio(self, persist: bool = True) -> dict[str, Any]:
+        """Refresh Factorio detection after installing/changing a Factorio version."""
+        self.factorio_detection = self._auto_detect_factorio(persist=persist)
+        return copy.deepcopy(self.factorio_detection)
 
     def save_config(self, updates: dict[str, Any]) -> dict[str, Any]:
         if "mods_dir" in updates:
@@ -317,10 +491,14 @@ class FactorioModManager:
         return self.mods_dir / "mod-list.json"
 
     def get_config(self) -> dict[str, Any]:
+        detection = self.factorio_detection or self._auto_detect_factorio(persist=False)
         return {
             **self.config,
             "mods_dir_exists": self.mods_dir.exists(),
             "mod_list_path": str(self.mod_list_path),
+            "factorio_detection": copy.deepcopy(detection),
+            "detected_factorio_version": detection.get("factorio_version"),
+            "detected_factorio_branch": detection.get("factorio_branch"),
         }
 
     def _read_mod_list(self) -> dict[str, Any]:
@@ -598,7 +776,10 @@ class FactorioModManager:
             )
             compatible = [
                 release for release in releases
-                if factorio_branch((release.get("info_json") or {}).get("factorio_version", "")) == target_branch
+                if factorio_version_compatible(
+                    (release.get("info_json") or {}).get("factorio_version", ""),
+                    self.config["factorio_version"],
+                )
             ]
             latest = None
             if compatible:
@@ -946,6 +1127,8 @@ class FactorioModManager:
             "tags": list(data.get("tags") or []),
             "changelog": data.get("changelog") or "",
             "factorio_version_display": factorio_display,
+            "selected_factorio_version": self.config.get("factorio_version"),
+            "selected_factorio_branch": factorio_branch(self.config.get("factorio_version", "2.1")),
             "release_count": len(releases),
         }
 
@@ -981,7 +1164,7 @@ class FactorioModManager:
 
         for raw in data.get("releases", []):
             release = self._raw_to_release(mod_name, raw)
-            if factorio_branch(release.factorio_version) != target_branch:
+            if not factorio_version_compatible(release.factorio_version, self.config["factorio_version"]):
                 continue
             if requested_version and release.version != requested_version:
                 continue
