@@ -1141,9 +1141,13 @@ class FactorioFletUI:
 
     async def render_settings(self):
         cfg = manager.get_config()
+        detection = cfg.get("factorio_detection") or {}
+        detected_version = detection.get("factorio_version") or cfg.get("factorio_version", "2.1")
+        detected_branch = detection.get("factorio_branch") or ".".join(str(detected_version).split(".")[:2])
+        detected_installations = detection.get("installations") or []
         mods_dir = ft.TextField(label="Factorio mods folder", value=cfg.get("mods_dir", ""))
-        factorio_version = ft.TextField(label="Factorio version", value=cfg.get("factorio_version", "2.0"))
-        exe = ft.TextField(label="Factorio executable", value=cfg.get("factorio_executable", ""), hint_text="C:\\Program Files\\Factorio\\bin\\x64\\factorio.exe")
+        factorio_version = ft.TextField(label="Factorio version (auto-detected)", value=cfg.get("factorio_version", detected_version))
+        exe = ft.TextField(label="Factorio executable (auto-detected)", value=cfg.get("factorio_executable", ""), hint_text="C:\\Program Files\\Factorio\\bin\\x64\\factorio.exe")
         args = ft.TextField(label="Launch arguments", value=cfg.get("launch_args", ""))
         deps = ft.Switch(label="Automatically install required dependencies", value=bool(cfg.get("install_dependencies", True)))
         menu_color = ft.TextField(label="Kode HEX", value=cfg.get("ui_menu_color", "#09111E"), width=165)
@@ -1333,6 +1337,56 @@ class FactorioFletUI:
                 r = await self.run_bg(manager.backup_state, "flet"); self.notify(f'Backup: {r["path"]}')
             except Exception as exc: self.notify(str(exc), True)
 
+        detection_text = ft.Text(
+            f"Detected: Factorio {detected_version} · branch {detected_branch}"
+            if detection.get("detected")
+            else "Factorio installation was not detected automatically.",
+            size=11,
+            color="#8fbf75" if detection.get("detected") else "#e4b65f",
+        )
+
+        async def detect_factorio(e):
+            e.control.disabled = True
+            detection_text.value = "Detecting installed Factorio versions..."
+            detection_text.color = "#8FA6BF"
+            self.page.update()
+            try:
+                result = await self.run_bg(manager.detect_factorio, True)
+                selected = result.get("selected")
+                if selected:
+                    factorio_version.value = selected["version"]
+                    exe.value = selected["executable"]
+                    detection_text.value = (
+                        f'Detected: Factorio {selected["version"]} · branch {selected["branch"]}'
+                        f' · {len(result.get("installations") or [])} installation(s)'
+                    )
+                    detection_text.color = "#8fbf75"
+                    self.notify(f'Factorio {selected["version"]} detected automatically.')
+                else:
+                    detection_text.value = "No Factorio installation detected. Set the executable manually."
+                    detection_text.color = "#e4b65f"
+            except Exception as exc:
+                detection_text.value = str(exc)
+                detection_text.color = "#ff8c86"
+            finally:
+                e.control.disabled = False
+                self.page.update()
+
+        detect_factorio_btn = ft.Button(
+            "Detect Factorio",
+            icon=ft.Icons.SEARCH,
+            on_click=detect_factorio,
+            bgcolor="#0F1C2D",
+            color="#D7E7F8",
+        )
+
+        installations_text = ft.Text(
+            " · ".join(f'{item["version"]} ({item["branch"]})' for item in detected_installations[:5])
+            if detected_installations else "No additional installations detected.",
+            size=10,
+            color="#6F849B",
+        )
+
         app_update_text = ft.Text("Not checked yet.", size=11, color="#8FA6BF")
         pull_update_btn = ft.Button("Pull Update", icon=ft.Icons.DOWNLOAD, disabled=True, bgcolor="#102033", color="#DCE9F6")
 
@@ -1415,7 +1469,13 @@ class FactorioFletUI:
         diag = await self.run_bg(manager.diagnostics)
         self.body.controls.extend([
             ft.Container(padding=16, border=ft.Border.all(1, "#1C314A"), border_radius=10, bgcolor="#0D1726", content=ft.Column(controls=[
-                mods_dir, factorio_version, exe, args, deps,
+                mods_dir,
+                ft.Row(wrap=True, controls=[factorio_version, detect_factorio_btn]),
+                exe,
+                detection_text,
+                installations_text,
+                args,
+                deps,
                 ft.Divider(color="#1C314A"),
                 ft.Text("Appearance", weight=ft.FontWeight.BOLD),
                 ft.Text("Pilih preset atau atur tiap warna dari palet lingkaran. Kode HEX dan preview warna selalu terlihat.", size=11, color="#6F849B"),
