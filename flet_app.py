@@ -11,7 +11,7 @@ from pathlib import Path
 import flet as ft
 
 from app_version import APP_VERSION
-from manager import FactorioModManager, ManagerError, BUILTIN_MODS
+from manager import FactorioModManager, ManagerError, BUILTIN_MODS, factorio_version_compatible
 from storage import app_data_dir
 from process_restart import schedule_restart, schedule_executable_replace_and_restart
 
@@ -744,7 +744,10 @@ class FactorioFletUI:
                 branch = ".".join(str(manager.config["factorio_version"]).split(".")[:2])
                 releases = [
                     r for r in mod["releases"]
-                    if ".".join(str(r["factorio_version"] or "").split(".")[:2]) == branch
+                    if factorio_version_compatible(
+                        str(r.get("factorio_version") or ""),
+                        manager.config["factorio_version"],
+                    )
                 ]
                 versions = ft.Dropdown(
                     label="Version",
@@ -765,7 +768,7 @@ class FactorioFletUI:
 
                 async def install_selected(ev):
                     if not versions.value:
-                        self.notify(f'No compatible release for Factorio {branch}.', True)
+                        self.notify(f'No compatible release for Factorio {manager.config["factorio_version"]}.', True)
                         return
                     ev.control.disabled = True
                     self.set_status(f'Installing {mod["name"]}...')
@@ -829,7 +832,10 @@ class FactorioFletUI:
                         ])
                     elif name == "Downloads":
                         for item in mod["releases"]:
-                            compatible = ".".join(str(item.get("factorio_version") or "").split(".")[:2]) == branch
+                            compatible = factorio_version_compatible(
+                                str(item.get("factorio_version") or ""),
+                                manager.config["factorio_version"],
+                            )
                             tab_content.controls.append(ft.Container(
                                 padding=11, bgcolor="#0D1726", border=ft.Border.all(1, "#1C314A"), border_radius=7,
                                 content=ft.Row(alignment=ft.MainAxisAlignment.SPACE_BETWEEN, controls=[
