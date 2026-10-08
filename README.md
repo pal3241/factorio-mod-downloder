@@ -1,6 +1,21 @@
 # Factorio Mod Manager
 
-Factorio Mod Manager 3 is a Windows-first mod manager with a Flet desktop UI, optional Flet/Flask web modes, tokenless Mod Portal browsing, dependency management, profiles, updates, and a real per-mod settings editor.
+Factorio Mod Manager 3.1 is a Windows-first mod manager with a Flet desktop UI, optional Flet/Flask web modes, tokenless Mod Portal browsing, dependency management, profiles, updates, and a real per-mod settings editor.
+
+
+## Factorio 2.1 + automatic backward compatibility
+
+The manager supports both Factorio 2.1 and older 2.x branches such as 2.0. On Windows it automatically searches common standalone and Steam installation locations, including additional Steam libraries, runs Factorio's official `--version` command, and selects the installed version/branch for Mod Portal search, release selection, dependency resolution, and updates.
+
+- Factorio 2.1 is the default when no installation can be detected
+- detected installations are shown in **Settings**
+- the configured Factorio executable is preferred when it is still installed
+- if no configured executable is available, the newest detected installation is selected
+- mods are selected against the detected Factorio branch instead of being hard-coded to 2.0
+- 2.0 and 2.1 releases can coexist in the Mod Portal history; the manager picks the release matching the active branch
+- explicit Mod Portal compatibility ranges such as **2.0 - 2.1** are recognized
+
+This does not force a 2.0-only mod into 2.1. Factorio 2.1 has modding/API changes, so a mod must have a compatible 2.1 release or an explicit compatible range before the manager offers it for installation.
 
 ## Windows — recommended
 
@@ -29,6 +44,12 @@ Optional UIs:
 python launcher.py flet-web
 python launcher.py web
 ```
+
+## 3.1 highlights
+
+### Automatic Factorio version detection
+
+The manager now detects installed Factorio versions and automatically switches its active mod branch. This keeps the same manager usable when moving between Factorio 2.0 and 2.1.
 
 ## 3.0 highlights
 
@@ -191,7 +212,7 @@ Output:
 dist\FactorioModManager.exe
 ```
 
-The build uses Flet Pack / PyInstaller and embeds `assets/icon.ico`.
+The build uses Flet Pack / PyInstaller and embeds `assets/icon.ico`. GitHub Release builds are produced by `.github/workflows/release.yml` and publish the Windows EXE plus SHA-256 checksum.
 
 ## Project layout
 
@@ -233,3 +254,12 @@ installs/relaunches itself from the user's real Windows Desktop folder. The app 
 Desktop build version in its application-data directory so an older portable copy cannot
 overwrite a newer Desktop build.
 
+
+## v3.1.0 — Factorio 2.1 support
+
+- automatic installed Factorio version detection
+- automatic branch-aware Mod Portal browsing and installation for 2.0/2.1
+- exact release selection follows the detected Factorio branch
+- explicit 2.0–2.1 compatibility ranges are recognized
+- Settings shows detected Factorio version, branch, executable, and detected installations
+- Windows release workflow builds and publishes the EXE automatically
