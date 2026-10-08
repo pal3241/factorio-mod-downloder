@@ -1,0 +1,71 @@
+name: Build and Release Windows EXE
+
+on:
+  push:
+    branches:
+      - "release/v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    if: startsWith(github.ref_name, 'release/v')
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pyinstaller pillow
+
+      - name: Generate icon
+        shell: pwsh
+        run: python tools/generate_icon.py
+
+      - name: Syntax check
+        shell: pwsh
+        run: |
+          python -m py_compile manager.py flet_app.py factorio_settings.py process_restart.py app.py launcher.py
+
+      - name: Build EXE
+        shell: pwsh
+        run: |
+          flet pack flet_app.py `
+            --name FactorioModManager `
+            --icon assets/icon.ico `
+            --product-name "Factorio Mod Manager" `
+            --product-version "3.1.0" `
+            --file-version "3.1.0.0" `
+            --file-description "Factorio Mod Manager" `
+            --company-name "Community" `
+            --bundle-id "dev.factorio.modmanager" `
+            --yes
+
+      - name: Verify EXE
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "dist\\FactorioModManager.exe")) { throw "EXE was not produced." }
+          $hash = (Get-FileHash "dist\\FactorioModManager.exe" -Algorithm SHA256).Hash
+          "FactorioModManager.exe SHA256: $hash" | Out-File "dist\\SHA256SUM.txt" -Encoding utf8
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ github.ref_name }}
+          target_commitish: ${{ github.sha }}
+          name: Factorio Mod Manager ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            dist/FactorioModManager.exe
+            dist/SHA256SUM.txt
